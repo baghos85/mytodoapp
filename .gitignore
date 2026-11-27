@@ -1,0 +1,53 @@
+# --- .NET ---
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+TestResults/
+*.trx
+coverage*/
+appsettings.*.local.json
+appsettings.Local.json
+
+# --- Node / Vite / Playwright ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# --- Python (MCP tooling) ---
+__pycache__/
+.venv/
+
+# --- Secrets & env ---
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+*.key
+*.publishsettings
+
+# --- Claude Code (local, per-user) ---
+.claude/settings.local.json
+
+# --- Azure / IaC ---
+.azure/
+*.parameters.local.json
+
+# --- Editors / OS ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

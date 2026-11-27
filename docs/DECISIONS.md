@@ -114,3 +114,232 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 - Agents that need MCP tools (frontend-dev, devops, reviewer) don't restrict their tool list; the reviewer uses `disallowedTools` to stay read-only.
 
 **Consequences:** One less credential to manage. If structured GitHub access is needed later, add the GitHub MCP with a fine-grained token stored only in an environment variable.
+
+---
+
+## ADR-009: Same origin: nginx reverse proxy and internal-only API ingress
+**Status:** Accepted (2026-11-27)
+
+**Context:** API and frontend run as separate containers (ADR-001). On different origins the auth cookie would be third-party (blocked by Safari and increasingly Chrome) and CORS would be needed.
+
+**Decision:**
+- The browser talks only to the web container (`ca-mytodoapp-web`). Its nginx serves the SPA and reverse-proxies `/api/*` to the API's internal FQDN. The API app (`ca-mytodoapp-api`) has **internal-only ingress**.
+- nginx sets `Host` to the upstream (Container Apps routes by Host) and passes the original host, client IP and scheme in `X-Forwarded-Host/-For/-Proto`; the API uses `ForwardedHeaders` middleware with a fixed `ForwardLimit`.
+- **No CORS** in the API. The frontend uses a configurable base URL (`VITE_API_BASE_URL`, default `/api/v1`); locally the Vite dev-server proxy forwards `/api`.
+
+**Consequences:** First-party `SameSite=Strict` cookie, no CORS, smaller attack surface. nginx is on every API request (small latency, proxy timeouts must cover cold starts). The API can't be called directly from the internet, so `/health` is probed by the platform only. See SPEC 7.1, 10.2.
+
+---
+
+## ADR-010: Authentication: ASP.NET Core Identity, cookie-only in v1, scheme-agnostic API
+**Status:** Accepted (2026-11-27)
+
+**Context:** We need accounts with email + password and a secure browser session; a mobile client might come later.
+
+**Decision:**
+- ASP.NET Core Identity (`IdentityUser<Guid>`) in the app's database. Only `register` and `login` of `MapIdentityApi` are exposed under `/api/v1/auth`, plus our own `logout`, `GET me` and `DELETE me`; other Identity endpoints return 404.
+- **Cookie only** in v1: `MyTodoApp.Auth`, `HttpOnly`, `Secure`, `SameSite=Strict`, 14-day sliding expiry. No antiforgery tokens (same origin + `SameSite=Strict` + JSON-only bodies + no CORS). `401`/`403` instead of redirects.
+- **Scheme agnostic:** endpoints use only `RequireAuthorization()`; Application code gets the user only via `ICurrentUser`; no code reads cookies directly. Bearer tokens (Identity bearer or JWT via OIDC) can be added later beside the cookie.
+
+**Consequences:** No token handling in the SPA (no XSS-stealable tokens). Bearer login is unsupported in v1. Adding mobile auth later is configuration + a new ADR, not a rewrite.
+
+---
+
+## ADR-011: Open registration with rate limiting and lockout
+**Status:** Accepted (2026-11-27)
+
+**Decision:** Anyone can register. `register`, `login` and `DELETE /auth/me` share the built-in rate limiter policy: fixed window, **10 requests/minute per client IP** → `429` with `Retry-After`. Identity lockout: 5 failed logins → 5 minutes. Limits are configurable so tests can raise them.
+
+**Consequences:** No invite flow to build. No email confirmation, so registration reveals whether an email exists (accepted v1 limitation, SPEC 7.2). Rate limiting depends on a correct client IP behind two proxies (ADR-009).
+
+---
+
+## ADR-012: Every task belongs to a list; Inbox created at registration
+**Status:** Accepted (2026-11-27)
+
+**Decision:** `TodoTask.ListId` is required. Each user gets an **Inbox** list (`IsDefault = true`), created in the same transaction as the user; it can't be renamed or deleted. Deleting another list deletes its tasks.
+
+**Consequences:** One simple invariant (no list-less tasks), an obvious home for quick-add in Today. Because `MapIdentityApi`'s register can't be extended, the Inbox is added by the `DbContext` when a new user is saved (ADR-021).
+
+---
+
+## ADR-013: Due dates as DateOnly; "today" from the browser's IANA time zone
+**Status:** Accepted (2026-11-27)
+
+**Decision:** `DueDate` is `DateOnly` (SQL `date`, JSON `YYYY-MM-DD`), no due times. Today/Upcoming endpoints take a required `timeZone` query parameter (IANA id from `Intl.DateTimeFormat().resolvedOptions().timeZone`); the server computes `today` from `TimeProvider` in that zone. Today includes overdue; Upcoming has no horizon. Timestamps are UTC.
+
+**Consequences:** No stored user time zone and no DST edge cases for dates. The runtime image must include ICU + tzdata. The frontend must never parse date-only strings with `new Date()`.
+
+---
+
+## ADR-014: GDPR: account deletion and privacy page in v1, export later
+**Status:** Accepted (2026-11-27)
+
+**Decision:** Self-service account deletion confirmed with the current password: hard delete of tasks, lists and the user in one transaction, then sign-out. Public `/privacy` page. Azure SQL point-in-time backup retention **7 days**, stated in the privacy notice. Data stays in France Central. Logs contain no emails or task/list content. Data export is a future item.
+
+**Consequences:** Deleted data disappears from backups after 7 days. Infra must keep backup retention (and backup storage location) consistent with the privacy notice.
+
+---
+
+## ADR-015: Data and API conventions: Guid v7, denormalised owner, string enums, caps instead of pagination
+**Status:** Accepted (2026-11-27)
+
+**Decision:**
+- Ids are `Guid.CreateVersion7()`. `TodoTask` carries a denormalised `UserId` (FK with `NoAction`, avoiding multiple cascade paths) so every query filters on the owner directly.
+- Enums are serialised as camelCase strings, stored as int.
+- No pagination in v1: collections are wrapped (`{ items, truncated }`), max 100 lists per user, max 500 tasks per response.
+
+**Consequences:** Simple ownership filters and index-friendly ids. Pagination can be added later without breaking clients. Code must keep `TodoTask.UserId` equal to the list's `UserId`.
+
+---
+
+## ADR-016: Read-only offline PWA; health probe without database
+**Status:** Accepted (2026-11-27)
+
+**Decision:**
+- vite-plugin-pwa (Workbox), prompt-to-update. App shell precached; `GET /api/v1/*` runtime-cached with NetworkFirst (10 s timeout, 100 entries, 7 days). No offline editing or background sync; mutating controls are disabled offline. Caches are cleared on sign-out, account deletion and `401`.
+- `/health` does not query the database, so probes don't keep Azure SQL serverless awake.
+
+**Consequences:** Simple, safe offline story with no conflict resolution. A DB outage is not visible in the health probe; it shows up as API errors and logs.
+
+---
+
+## ADR-017: Azure resource topology, naming and sizing
+**Status:** Proposed
+
+**Context:** The devops agent needs exact resource names and cost-efficient settings (CLAUDE.md: scale to zero, serverless SQL).
+
+**Decision:**
+- In `rg-mytodoapp` (France Central): `log-mytodoapp` (30-day retention), `cae-mytodoapp` (Consumption, no VNet), `acrmytodoapp<sfx>` (Basic, admin user off), `ca-mytodoapp-web`, `ca-mytodoapp-api`, `caj-mytodoapp-migrate`, `sql-mytodoapp-<sfx>` / `sqldb-mytodoapp`, identities `id-mytodoapp-{web,api,migrate}`. `<sfx>` = `take(uniqueString(resourceGroup().id), 6)` only for globally unique names.
+- One user-assigned identity per app, each with AcrPull only (plus SQL rights per ADR-019).
+- Both apps: min replicas 0, max 2, 0.25 vCPU / 0.5 GiB. SQL: serverless GP_S_Gen5, max 1 vCore, auto-pause 60 min, 2 GB, PITR 7 days, **Local** backup redundancy (backups stay in France Central).
+- Images tagged with the commit SHA.
+
+**Alternatives:** One shared identity for all apps (simpler, but the web app would hold SQL-capable credentials); a VNet with private endpoints (more secure, costs more and adds complexity).
+
+**Consequences:** Near-zero idle cost; cold starts after idle. Bicep is split into `core.bicep` and `apps.bicep` (ADR-023).
+
+---
+
+## ADR-018: Database migrations: EF Core bundle run by a Container Apps Job
+**Status:** Proposed
+
+**Context:** Migrations must run in Azure on each deployment. The deploy identity (ADR-005) has no SQL data-plane access, the API connects with Entra-only managed identity, and SQL serverless may need ~1 minute to resume.
+
+**Decision:**
+- `deploy.yml` builds a `mytodoapp-migrate` image containing a self-contained EF Core migration bundle (plus `go-sqlcmd` for the idempotent API-user grant, ADR-019), and runs it as the manual-trigger Container Apps Job `caj-mytodoapp-migrate` with its own identity `id-mytodoapp-migrate`.
+- Order: push images → update job image → run job and wait → only then switch the API and web apps to the new image. A failed migration stops the deployment while the old version keeps serving.
+- Migrations must be **backward compatible** with the previous API version (expand/contract).
+
+**Alternatives:** (a) API migrates at start-up: simplest, but the internet-facing API would need DDL rights, start-up waits for SQL resume, and replicas race. (b) Bundle run from the GitHub runner: needs SQL firewall openings for runner IPs and data-plane rights for the CI identity. (c) Idempotent SQL script: same problems as (b).
+
+**Consequences:** API stays least-privileged (no DDL). One extra image and job to maintain. Starting the job uses `az containerapp job start` (allowed by Contributor).
+
+---
+
+## ADR-019: Azure SQL: Entra-only auth, per-app managed identities, admin group
+**Status:** Proposed
+
+**Context:** No passwords (CLAUDE.md). Someone must be SQL Entra admin, and the API's database user must be created.
+
+**Decision:**
+- `azureADOnlyAuthentication: true`. Entra admin = security group **`sg-mytodoapp-sql-admins`** (owner + `id-mytodoapp-migrate`); its object id comes from GitHub variable `SQL_ADMIN_GROUP_OBJECT_ID`.
+- `id-mytodoapp-api` gets `db_datareader` + `db_datawriter` only. The migration job creates/grants it on every run with an idempotent script (`CREATE USER ... FROM EXTERNAL PROVIDER WITH OBJECT_ID = ...`, so the server needs no Graph "Directory Readers" role).
+- Connection strings use `Authentication=Active Directory Managed Identity;User Id=<client id>` (no secret).
+- Network: public endpoint with only the "Allow Azure services" rule; no client-IP rules.
+- One-time owner steps: create the group, add yourself, set the variable; after the first deployment, add `id-mytodoapp-migrate` to the group and re-run the migration step.
+
+**Alternatives:** (1) Owner as the only Entra admin and a one-time manual SQL script to create both identities' users: fewer automated admin rights, but a manual data-plane step that needs a client firewall rule. (2) `id-mytodoapp-migrate` as the direct Entra admin: zero manual steps, but the owner has no direct DB access without a Bicep change.
+
+**Consequences:** Fully automated after the one-time setup; the migrate identity is effectively server admin, so the job image must come only from our ACR via the pipeline. "Allow Azure services" admits connections from any Azure tenant to the endpoint (authentication still required); private networking is a later option.
+
+---
+
+## ADR-020: Persist Data Protection keys in Azure SQL
+**Status:** Proposed
+
+**Context:** The Identity cookie is encrypted with ASP.NET Core Data Protection keys. By default they live in the container's file system, which is lost on every restart, scale-from-zero and new revision, so all users would be signed out constantly and replicas couldn't read each other's cookies.
+
+**Decision:** `AddDataProtection().SetApplicationName("MyTodoApp").PersistKeysToDbContext<AppDbContext>()` (package `Microsoft.AspNetCore.DataProtection.EntityFrameworkCore`); keys in table `DataProtectionKeys`.
+
+**Alternatives:** Azure Blob Storage + Key Vault key wrapping (keys encrypted at rest with a KV key; two more resources and RBAC assignments, which the deploy identity can't create today per ADR-005).
+
+**Consequences:** Sessions survive restarts and scaling with no new resources. Keys are protected by database access control and TDE, not by a separate key; Key Vault wrapping can be added later.
+
+---
+
+## ADR-021: Backend composition details
+**Status:** Proposed
+
+**Context:** ADR-002 sets the layers; agents need the concrete wiring to be consistent.
+
+**Decision:**
+- `IAppDbContext` (Application) exposes `DbSet<TaskList>`, `DbSet<TodoTask>` and `SaveChangesAsync`; Application references the base `Microsoft.EntityFrameworkCore` package (no provider) for LINQ async operators.
+- `AppDbContext : IdentityUserContext<User, Guid>` (no role tables) in Infrastructure; `User : IdentityUser<Guid>` lives in Infrastructure; Domain entities hold `UserId` as a plain `Guid`. Users are reached through `IIdentityService`.
+- **Inbox creation:** `AppDbContext.SaveChangesAsync` adds `TaskList.CreateInbox(...)` for each newly added `User` (same `SaveChanges`, same transaction).
+- **Handler registration** by reflection scanning in `AddApplication()` (no Scrutor), verified by a unit test.
+- `ICurrentUser` implemented in Api from claims. `TimeProvider` injected everywhere (no custom `IClock`).
+- Explicit ownership filters in each query; no global query filters.
+- `EnableRetryOnFailure` for SQL; explicit transactions via the execution strategy.
+
+**Alternatives:** Explicit handler registration (clearer, but every PR edits the same file); a custom register endpoint instead of `MapIdentityApi` for the Inbox (more code to own); global query filters (less repetition, hidden behaviour).
+
+**Consequences:** Adding a use case = add folder + handler, nothing else. The Inbox rule is enforced for any code path that creates users.
+
+---
+
+## ADR-022: Test databases and deterministic time
+**Status:** Proposed
+
+**Context:** CLAUDE.md requires handler unit tests and endpoint integration tests that are deterministic. Behaviour that matters (case-insensitive unique names, cascades, filtered unique index, migrations, `DateOnly` mapping) is SQL Server-specific.
+
+**Decision:**
+- **API integration tests: SQL Server in Docker via Testcontainers** (`Testcontainers.MsSql`): one container per test assembly, a fresh migrated database per test class, each test uses its own users.
+- **Handler unit tests: the real `AppDbContext` on SQLite in-memory** (`Microsoft.EntityFrameworkCore.Sqlite`): fast, relational, no Docker. SQL Server-specific behaviour is asserted only in integration tests.
+- Time: a hand-written `FixedTimeProvider : TimeProvider` per test project (no `Microsoft.Extensions.TimeProvider.Testing` package). No assertion or mocking library.
+
+**Alternatives:** SQLite for integration tests too (no Docker, but case sensitivity, cascade and index behaviour differ, so it would pass tests that fail in production); EF Core InMemory provider for handler tests (not relational, no `ExecuteDelete`, no constraints).
+
+**Consequences:** Docker is required to run integration tests locally (Docker Desktop) and is available on GitHub `ubuntu-latest` runners. First run downloads the SQL Server image (~1.5 GB); the container start adds ~15–30 s per test run.
+
+---
+
+## ADR-023: CI/CD workflow shape
+**Status:** Proposed
+
+**Decision:**
+- `ci.yml` always runs on PRs; a `changes` job (plain `git diff`, no third-party action) decides which jobs run (backend, frontend, infra, images, e2e). An aggregate **`ci-ok`** job is the single required status check, so skipped jobs never block a PR.
+- `deploy.yml` on push to `main` (docs-only changes ignored) and `workflow_dispatch`: deploy `infra/core.bicep` → build/push images (SHA tags) → deploy `infra/apps.bicep` (job with new image, apps with current images) → run migration job → update API, then web → smoke test (`/healthz` 200, `/api/v1/auth/me` 401).
+- No GitHub `environment:` on the deploy job, because it would change the OIDC subject away from `ref:refs/heads/main` (ADR-005).
+
+**Alternatives:** Path filters on the workflow trigger (simpler, but required checks would stay "pending" on PRs that don't match); a single Bicep file with placeholder images on the first deployment (fragile probes and ordering).
+
+**Consequences:** Migrations always run before new code serves traffic. Two Bicep entry files to maintain. Adding approval gates via GitHub environments later needs a new federated credential.
+
+---
+
+## ADR-024: Local development with docker compose
+**Status:** Proposed
+
+**Decision:** `compose.yaml` at the repo root with `sql` (SQL Server 2022 Developer container), `migrate`, `api` and `web`; `docker compose up --build` reproduces the production topology at `http://localhost:8080` and is what Playwright runs against. Inner loop: compose `sql` + `migrate`, `dotnet run` for the API (user-secrets connection string) and `npm run dev` with the Vite proxy. The local SA password lives in a git-ignored `.env` (`.env.example` committed).
+
+**Alternatives:** LocalDB (Windows only, doesn't work in CI or containers).
+
+**Consequences:** Same engine locally, in CI and close to Azure SQL. Docker Desktop is required on the owner's machine.
+
+---
+
+## ADR-025: Package and image baseline
+**Status:** Proposed
+
+**Context:** CLAUDE.md: ask before adding any NuGet/npm package and record why. This is the baseline the agents may use without asking again; anything else still needs approval.
+
+**Decision:**
+- **NuGet (runtime):** `Microsoft.EntityFrameworkCore` (Application), `Microsoft.EntityFrameworkCore.SqlServer`, `Microsoft.EntityFrameworkCore.Design` (private assets), `Microsoft.AspNetCore.Identity.EntityFrameworkCore`, `Microsoft.AspNetCore.DataProtection.EntityFrameworkCore` (Infrastructure), `Microsoft.AspNetCore.OpenApi` (Api). Tool: `dotnet-ef` (local tool manifest).
+- **NuGet (tests):** `xunit.v3`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`, `Microsoft.AspNetCore.Mvc.Testing`, `Microsoft.EntityFrameworkCore.Sqlite`, `Testcontainers.MsSql`.
+- **npm (runtime):** `react`, `react-dom`, `react-router`, `@tanstack/react-query`, `vite-plugin-pwa` (+ `workbox-window`).
+- **npm (dev):** `typescript`, `vite`, `@vitejs/plugin-react`, `eslint`, `@eslint/js`, `typescript-eslint`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`, `eslint-plugin-jsx-a11y`, `prettier`, `eslint-config-prettier`, `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/user-event`, `@testing-library/jest-dom`, `@playwright/test`, `@axe-core/playwright`.
+- **Images/tools:** `mcr.microsoft.com/dotnet/{sdk,aspnet,runtime-deps}:10.0`, `node:24-alpine`, `nginxinc/nginx-unprivileged:stable-alpine`, `mcr.microsoft.com/mssql/server:2022-latest`, `go-sqlcmd` (in the migrate image).
+- Deliberately **not** used: MediatR, AutoMapper, FluentValidation, FluentAssertions (commercial from v8), Moq, Scrutor, UI component libraries, CSS-in-JS, MSW (may be proposed later).
+
+**Consequences:** All baseline packages are MIT/Apache and maintained by Microsoft or large communities. Version bumps within these packages need no ADR.

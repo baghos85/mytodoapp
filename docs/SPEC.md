@@ -1,6 +1,6 @@
 # MyTodoApp: Specification
 
-> **Status:** v1, written by the architect agent (setup step 4.1); owner answers to the open questions applied 2026-11-27. Awaiting final owner approval (step 4.3).
+> **Status:** v1, written by the architect agent (setup step 4.1); owner answers to the open questions applied 2026-11-27. Architecture (section 10) added in step 4.2. Awaiting final owner approval (step 4.3).
 > This file is the single source of truth for *what* we build. Frontend and backend agents build against the API contract below, so keep it precise.
 
 ## 1. Overview
@@ -106,7 +106,7 @@ Suggested indexes: `TodoTask (UserId, IsCompleted, DueDate)`, `TodoTask (ListId,
 
 ### 3.4 Relationships and decisions
 - User 1 → * TaskList, TaskList 1 → * TodoTask, User 1 → * TodoTask (denormalised).
-- **Every task belongs to a list.** Each user gets an **Inbox** list (`IsDefault = true`, `Name = "Inbox"`) created **atomically with the user at registration** (same transaction; e.g. the Infrastructure `DbContext` adds the Inbox when a new user is added, since `MapIdentityApi`'s register endpoint can't be extended directly. Exact mechanism is decided in step 4.2). Why: one simple invariant (no "list-less" tasks, no nullable `ListId`), every task is visible in exactly one list view, and quick-add from Today has an obvious home.
+- **Every task belongs to a list.** Each user gets an **Inbox** list (`IsDefault = true`, `Name = "Inbox"`) created **atomically with the user at registration** (same transaction; e.g. the Infrastructure `DbContext` adds the Inbox when a new user is added, since `MapIdentityApi`'s register endpoint can't be extended directly. Mechanism: see 10.4). Why: one simple invariant (no "list-less" tasks, no nullable `ListId`), every task is visible in exactly one list view, and quick-add from Today has an obvious home.
 - Deleting a list deletes all its tasks (database cascade). The Inbox cannot be deleted, so the user always has at least one list.
 - Limits (to keep v1 free of pagination): **max 100 lists per user**. Task count is not capped, but collection endpoints return at most **500 tasks** (see 4.1).
 - No soft delete, no audit history, no optimistic concurrency in v1 (last write wins).
@@ -517,9 +517,16 @@ Latest two major versions of Chrome, Edge, Firefox and Safari (macOS and iOS/iPa
 
 ## 9. Open questions
 
-None at the moment. The owner answered the first round on 2026-11-27 (same origin: yes; open registration: yes; account deletion + privacy page: in v1, data export out; limits: kept; Upcoming: no horizon).
+The owner answered the first round on 2026-11-27 (same origin: yes; open registration: yes; account deletion + privacy page: in v1, data export out; limits: kept; Upcoming: no horizon).
 
-**Decisions to record as ADRs in 4.2**
+**Raised in step 4.2 (owner to answer in 4.3)**
+1. **Proposed ADRs 017–025** (section 10): accept, or pick the listed alternative.
+2. **Login without `useCookies=true`:** the bearer scheme is not registered in v1, so `MapIdentityApi`'s login would fail with a 500. Proposal: the auth endpoint filter rejects it with `400` ProblemDetails, `detail: "Only cookie login is supported."` (small addition to endpoint 2).
+3. **Log retention in the privacy notice:** Log Analytics keeps logs **30 days** (10.11). Proposal: add "Logs are kept for 30 days." to the Privacy page's "Logs" bullet.
+4. **Azure SQL free offer:** the serverless database could use the Azure SQL Database free offer (monthly free vCore-seconds, auto-pause when exhausted), one per subscription. Use it if the subscription doesn't already have one? Default in 10.1 is the regular serverless tier.
+5. **One-time Entra steps for the owner** (ADR-019): create the group `sg-mytodoapp-sql-admins`, add yourself, store its object id as the GitHub repo variable `SQL_ADMIN_GROUP_OBJECT_ID`, and after the first deployment add `id-mytodoapp-migrate` to the group. OK?
+
+**Decisions recorded as ADRs in 4.2** (ADR-009 to ADR-016)
 - Same-origin deployment: nginx in the frontend container reverse-proxies `/api` to an API with internal-only ingress; no CORS; Vite dev-server proxy locally.
 - Cookie-only auth in v1 (Identity application cookie, HttpOnly, Secure, `SameSite=Strict`, no antiforgery tokens); only register/login of `MapIdentityApi` exposed, plus custom logout, me and delete-me.
 - Auth-scheme agnostic API: `RequireAuthorization()`/`[Authorize]` only, user via `ICurrentUser` only, no direct cookie access, so bearer tokens (Identity bearer or JWT via OIDC) can be added later for a mobile client.
@@ -532,3 +539,315 @@ None at the moment. The owner answered the first round on 2026-11-27 (same origi
 - No pagination in v1: `{ items, truncated }` wrapper, max 100 lists per user, max 500 tasks per response.
 - Read-only offline via Workbox NetworkFirst runtime cache of `GET /api/v1/*`; caches cleared on sign-out, account deletion and `401`.
 - `/health` probes don't touch the database (keeps Azure SQL serverless able to auto-pause).
+
+## 10. Architecture
+
+How the system is built and deployed. Decisions behind it: ADR-009 to ADR-025 in `docs/DECISIONS.md` (ADR-017 to ADR-025 are **Proposed** until the owner accepts them in step 4.3).
+
+### 10.1 Runtime overview
+
+```
+ Browser (SPA + service worker)
+    |  HTTPS, one origin: https://ca-mytodoapp-web.<env-default-domain>
+    v
++-- cae-mytodoapp (Container Apps environment, Consumption, no VNet) ----------------------+
+|                                                                                          |
+|  ca-mytodoapp-web     external ingress, HTTPS only, target port 8080                     |
+|  nginx-unprivileged:  /            -> static SPA (index.html fallback)                   |
+|                       /api/*       -> reverse proxy -----------------+                   |
+|                       /healthz     -> 200 (probe)                    |                   |
+|                                                                      v                   |
+|  ca-mytodoapp-api     internal ingress only, target port 8080   (https://ca-mytodoapp-   |
+|  ASP.NET Core .NET 10 (Minimal APIs, Identity cookie)            api.internal.<domain>)  |
+|                                                                                          |
+|  caj-mytodoapp-migrate  Container Apps Job, manual trigger: EF Core migration bundle     |
++----------------|---------------------------------------------|---------------------------+
+                 | TDS 1433, Entra token (user-assigned MI)    | stdout/stderr
+                 v                                             v
+   sql-mytodoapp-<sfx> / sqldb-mytodoapp               log-mytodoapp (Log Analytics)
+   (serverless, Entra-only auth)
+   acrmytodoapp<sfx> (images; pulled with AcrPull by each app's identity)
+```
+
+All resources live in **`rg-mytodoapp`** (France Central). `<sfx>` = `take(uniqueString(resourceGroup().id), 6)`, used only where the name must be globally unique.
+
+| Resource | Name | Settings |
+|---|---|---|
+| Log Analytics workspace | `log-mytodoapp` | PerGB2018, **30-day** retention |
+| Container Apps environment | `cae-mytodoapp` | Consumption only, no VNet, app logs → `log-mytodoapp` |
+| Container registry | `acrmytodoapp<sfx>` | Basic SKU, admin user **disabled**, RBAC (non-ABAC) permissions mode |
+| Web app | `ca-mytodoapp-web` | External ingress, `allowInsecure: false`, single revision mode |
+| API app | `ca-mytodoapp-api` | **Internal ingress only**, single revision mode |
+| Migration job | `caj-mytodoapp-migrate` | Trigger `Manual`, replica timeout 600 s, retry limit 1 |
+| SQL logical server | `sql-mytodoapp-<sfx>` | **Entra-only auth**, min TLS 1.2, public network access with the "Allow Azure services" rule only (ADR-019) |
+| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, max 1 vCore, min 0.5, auto-pause 60 min, max size 2 GB, PITR **7 days**, backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice) |
+| Managed identities (user-assigned) | `id-mytodoapp-web`, `id-mytodoapp-api`, `id-mytodoapp-migrate` | Each: AcrPull on the registry. SQL rights: see 10.6 |
+
+Images in ACR: `mytodoapp-web`, `mytodoapp-api`, `mytodoapp-migrate`, tagged with the full commit SHA (never `latest`).
+
+### 10.2 Request and auth flow
+1. Browser loads the SPA from `ca-mytodoapp-web`. SPA calls `GET /api/v1/auth/me` (relative URL, same origin).
+2. nginx proxies `/api/*` to the API's internal FQDN. The API answers `401` → SPA shows `/login`.
+3. `POST /api/v1/auth/login?useCookies=true` → API sets `MyTodoApp.Auth` (`HttpOnly; Secure; SameSite=Strict; Path=/`). nginx passes `Set-Cookie` through unchanged, so the cookie belongs to the **frontend origin**.
+4. Later `/api` calls carry the cookie automatically; nginx forwards it; the API authenticates via the Identity cookie handler.
+
+nginx `/api/` location (in `src/frontend/nginx/default.conf.template`, rendered by the nginx image's built-in envsubst at start-up):
+
+```nginx
+location /api/ {
+    proxy_pass ${API_UPSTREAM};                    # e.g. https://ca-mytodoapp-api.internal.<env-default-domain> (no path: URI passed unchanged)
+    proxy_ssl_server_name on;
+    proxy_set_header Host $proxy_host;             # REQUIRED: Container Apps routes by Host, so it must be the API's FQDN
+    proxy_set_header X-Forwarded-Host $host;       # original public host
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $fwd_proto; # map: $http_x_forwarded_proto from the external ingress, else $scheme
+    proxy_connect_timeout 10s;
+    proxy_read_timeout 120s;                       # covers SQL serverless resume (~1 min)
+    client_max_body_size 64k;
+}
+```
+
+- **Do not forward the original `Host` as `Host`**: the environment's internal ingress would not find the API app. The original host travels in `X-Forwarded-Host`.
+- How nginx reaches the API: through the environment's internal ingress at `https://ca-mytodoapp-api.internal.<env-default-domain>` (Bicep: `apiApp.properties.configuration.ingress.fqdn`), passed to the web container as `API_UPSTREAM`. Locally (compose) `API_UPSTREAM=http://api:8080`.
+- **API forwarded headers** (`UseForwardedHeaders()` first in the pipeline): `ForwardedHeaders = XForwardedFor | XForwardedProto`; clear `KnownIPNetworks` and `KnownProxies` (`KnownNetworks` is obsolete in .NET 10; the API is only reachable from inside the environment); `ForwardLimit` from config (`ForwardedHeaders:ForwardLimit`, default **2**: external ingress → nginx → internal ingress). The devops issue must verify the hop count on Azure (log `RemoteIpAddress` once) because the rate limiter (5.6) keys on it. Never set `ForwardLimit = null` (a client could spoof `X-Forwarded-For`).
+- TLS ends at the Container Apps ingress. The API doesn't call `UseHttpsRedirection`/`UseHsts` (nginx sends HSTS). The cookie uses `CookieSecurePolicy.Always`.
+- Unauthenticated → `401`, forbidden → `403`: set `Events.OnRedirectToLogin`/`OnRedirectToAccessDenied` to write the status code (don't rely only on .NET 10's API-endpoint detection).
+- Identity registration: `AddIdentityCore<User>().AddEntityFrameworkStores<AppDbContext>().AddSignInManager().AddApiEndpoints()` + `AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies()`. **Not** `AddIdentityApiEndpoints` (it also registers the bearer scheme).
+- `/api/v1/auth` group: an endpoint filter allows only `register`, `login`, `logout`, `me` (GET/DELETE); everything else from `MapIdentityApi` returns `404` (4.4). Login without `useCookies=true`: see open question 2 in section 9.
+- Rate limiter: built-in `AddRateLimiter`, policy `"auth"` (fixed window, partition = `RemoteIpAddress`), `PermitLimit`/`Window` from config `RateLimiting:Auth` (defaults 10 / 1 min) so tests can raise them. `OnRejected` sets `Retry-After` and writes ProblemDetails `429`.
+
+### 10.3 Backend solution structure
+
+Root files: `MyTodoApp.slnx` (all projects), `global.json` (pins .NET 10 SDK), `Directory.Build.props` (nullable, implicit usings, `TreatWarningsAsErrors`, `InvariantGlobalization=false`), `Directory.Packages.props` (central package versions), `.editorconfig`, `.config/dotnet-tools.json` (`dotnet-ef`).
+
+| Project | References | Contents |
+|---|---|---|
+| `MyTodoApp.Domain` | none (no packages) | Entities `TaskList`, `TodoTask` (`UserId` is a plain `Guid`, no navigation to the Identity user), enum `TaskPriority`, length constants (`TaskList.NameMaxLength = 100`...), behaviour (`Rename`, `Complete(now)`, `Uncomplete(now)`, `MoveTo(listId)`, `TaskList.CreateInbox(userId, now)`, Inbox guards). |
+| `MyTodoApp.Application` | Domain; package `Microsoft.EntityFrameworkCore` (no provider) | Commands/queries, handlers, DTOs + `ToDto()`, interfaces. |
+| `MyTodoApp.Infrastructure` | Application | `AppDbContext`, configurations, migrations, Identity `User`, `IdentityService`, Data Protection key store. |
+| `MyTodoApp.Api` | Application, Infrastructure (composition root only) | `Program.cs`, endpoints, request records, auth, rate limiting, exception handler, OpenAPI. |
+| `MyTodoApp.Domain.UnitTests` | Domain | Entity behaviour. |
+| `MyTodoApp.Application.UnitTests` | Application, Infrastructure | Handlers against `AppDbContext` on SQLite in-memory (10.12). |
+| `MyTodoApp.Api.IntegrationTests` | Api | `WebApplicationFactory` + SQL Server in Testcontainers. |
+
+`Common/` folders:
+| Project | `Common/` contains |
+|---|---|
+| Domain | `DomainException` base, `NotFoundException`, `ConflictException`, `ForbiddenException`, `DomainValidationException` (carries `Field` + message, for `errors.<field>`). |
+| Application | `ICommandHandler<,>`, `IQueryHandler<,>`, `IAppDbContext`, `ICurrentUser`, `IIdentityService`, `Time/TimeProviderExtensions.GetToday(TimeZoneInfo)`, `Time/UserTimeZone.TryResolve(string?, out TimeZoneInfo)`, `DependencyInjection.AddApplication()`. |
+| Infrastructure | `DependencyInjection.AddInfrastructure(IConfiguration)`, `Persistence/` (`AppDbContext`, `UtcDateTimeConverter`, `DesignTimeDbContextFactory`, `Migrations/`). Identity code in `Identity/`. |
+| Api | `ExceptionHandler` (`IExceptionHandler`), `HttpCurrentUser`, `JsonSetup`, `AuthSetup`, `RateLimitingSetup`, `ForwardedHeadersSetup`. |
+
+Feature and action folder names (use exactly these):
+| Feature | Actions (endpoint #) |
+|---|---|
+| `Accounts` (Api group `/api/v1/auth`) | `GetCurrentUser` (4), `DeleteAccount` (21), `Logout` (3, Api only, no handler). Register/login come from `MapIdentityApi`. |
+| `TaskLists` | `GetTaskLists` (5), `GetTaskList` (6), `CreateTaskList` (7), `RenameTaskList` (8), `DeleteTaskList` (9) |
+| `Tasks` | `GetListTasks` (10), `CreateTask` (11), `GetTask` (12), `UpdateTask` (13), `DeleteTask` (14), `CompleteTask` (15), `UncompleteTask` (16), `GetTodayTasks` (17), `GetUpcomingTasks` (18), `GetCompletedTasks` (19) |
+
+`TasksEndpoints.cs` maps two groups: `/api/v1/tasks` and `/api/v1/task-lists/{listId:guid}/tasks`.
+
+**DI composition** (`Program.cs`): `builder.Services.AddApplication().AddInfrastructure(builder.Configuration)` plus Api setup methods; endpoints via `app.MapAccountsEndpoints()`, `MapTaskListsEndpoints()`, `MapTasksEndpoints()`, `app.MapHealthChecks("/health")`.
+- `AddApplication()` registers handlers by **reflection scanning** of the Application assembly (plain .NET reflection, no Scrutor): every non-abstract class implementing a closed `ICommandHandler<,>` or `IQueryHandler<,>` is registered **scoped** under that interface. New handlers need no registration edit (fewer merge conflicts between parallel PRs). A unit test asserts every handler resolves; Development uses `ValidateOnBuild`.
+- Endpoints inject the handler interface, e.g. `ICommandHandler<CreateTaskCommand, TaskDto>`.
+
+**`ICurrentUser`** (`Guid UserId { get; }`) is implemented in Api by `HttpCurrentUser` (scoped) from `ClaimTypes.NameIdentifier`; throws `InvalidOperationException` if absent (it's only used behind `RequireAuthorization()`). No other code reads `HttpContext.User`.
+
+**`IIdentityService`** (Application interface, Infrastructure implementation over `UserManager<User>`): `FindEmailAsync(userId, ct)` (for `GET /auth/me`; `null` → endpoint returns `401`, e.g. account deleted on another device), `CheckPasswordAsync(userId, password, ct)`, `DeleteUserAndDataAsync(userId, ct)` (one transaction, see 10.4). The `DeleteAccount` handler: password check → `DomainValidationException("password", "Incorrect password.")` or delete; the endpoint then calls `SignInManager.SignOutAsync()`.
+
+**Time:** `TimeProvider.System` registered as singleton; code injects `TimeProvider` (no separate `IClock`). Never `DateTime.Now/UtcNow`.
+
+**User time zone (endpoints 17, 18):** handler calls `UserTimeZone.TryResolve(query.TimeZone, out tz)` (`TimeZoneInfo.TryFindSystemTimeZoneById`; missing or unknown → `DomainValidationException("timeZone", "The time zone is missing or unknown.")`), then `today = timeProvider.GetToday(tz)` (formula in 5.1). IANA ids need ICU + tzdata: the runtime image is the regular (non-chiseled) `aspnet` image and `InvariantGlobalization` stays `false`; an integration test resolves `Europe/Paris`.
+
+**JSON:** `ConfigureHttpJsonOptions`: `JsonStringEnumConverter(JsonNamingPolicy.CamelCase)`; camelCase is the default. `DateOnly` → `"YYYY-MM-DD"` natively; `DateTime` with `Kind = Utc` → `...Z` (see the UTC converter in 10.4).
+
+**Errors:** `ExceptionHandler` maps `NotFoundException` → 404, `ConflictException` → 409, `ForbiddenException` → 403, `DomainValidationException` → 400 `ValidationProblemDetails` (`errors[field]`), else 500 with `title: "An unexpected error occurred."` + `traceId`, logged at Error with a message template.
+
+### 10.4 Data access
+- `AppDbContext : IdentityUserContext<User, Guid>, IAppDbContext, IDataProtectionKeyContext` (Infrastructure). `IdentityUserContext` = users, claims, logins, tokens; no role tables (no roles in v1). Identity tables keep their default names (`AspNetUsers`...); ours: `TaskLists`, `Tasks`, `DataProtectionKeys`.
+- `User : IdentityUser<Guid>` lives in `Infrastructure/Identity/` (Domain must not reference Identity); its constructor sets `Id = Guid.CreateVersion7()`.
+- `IAppDbContext` exposes `DbSet<TaskList> TaskLists`, `DbSet<TodoTask> Tasks`, `SaveChangesAsync(ct)`. Users are reached only through `IIdentityService`.
+- Configurations: `Infrastructure/TaskLists/TaskListConfiguration.cs`, `Infrastructure/Tasks/TodoTaskConfiguration.cs`, applied with `ApplyConfigurationsFromAssembly`. Relationships to `User` are configured there with `HasOne<User>().WithMany().HasForeignKey(x => x.UserId)`.
+- Conventions (`ConfigureConventions`): all `DateTime` properties use `UtcDateTimeConverter` (writes UTC, reads with `DateTimeKind.Utc`; otherwise EF returns `Unspecified` and JSON loses the `Z`). `DateOnly` → `date`, `TaskPriority` → `int`. Explicit max lengths per 3.2/3.3. Default database collation (case-insensitive) is relied on for name uniqueness.
+- **Inbox at registration:** `AppDbContext.SaveChangesAsync` override: for every `User` entry in state `Added`, add `TaskList.CreateInbox(user.Id, now)` before calling `base.SaveChangesAsync`. `UserManager.CreateAsync` saves once, so user + Inbox are one transaction. `AppDbContext` gets `TimeProvider` by constructor injection; `DesignTimeDbContextFactory` supplies `TimeProvider.System` for `dotnet ef`.
+- **Unique-index race:** `SaveChangesAsync` translates `DbUpdateException` with SQL error 2601/2627 into `ConflictException` (handlers pre-check names; this only catches races).
+- **Ownership:** explicit `Where(x => x.UserId == currentUser.UserId)` in every query. No global query filters (visible in review, no hidden coupling to `ICurrentUser`).
+- **Queries:** `AsNoTracking()`, `Select` straight to DTO (`openTaskCount` and `listName` as subqueries/joins in the projection). Task collections `Take(501)`; `truncated = count > 500`, return the first 500.
+- **Resilience:** `UseSqlServer(cs, o => o.EnableRetryOnFailure(maxRetryCount: 6, maxRetryDelay: 30 s))`, `Connect Timeout=60` (serverless resume). Explicit transactions (account deletion) run inside `Database.CreateExecutionStrategy().ExecuteAsync(...)`.
+
+Indexes and delete behaviour:
+| Table | Index / FK | Purpose |
+|---|---|---|
+| TaskLists | unique `(UserId, Name)` | name uniqueness (case-insensitive via collation); list queries by user |
+| TaskLists | unique filtered `(UserId) WHERE IsDefault = 1` | at most one Inbox per user |
+| TaskLists | FK `UserId` → AspNetUsers, **Cascade** | |
+| Tasks | `(UserId, IsCompleted, DueDate)` | Today / Upcoming |
+| Tasks | `(UserId, IsCompleted, CompletedAt)` | Completed view |
+| Tasks | `(ListId, IsCompleted)` | list view, `openTaskCount` |
+| Tasks | FK `ListId` → TaskLists, **Cascade** | deleting a list deletes its tasks |
+| Tasks | FK `UserId` → AspNetUsers, **NoAction** | avoids multiple cascade paths |
+
+**Account deletion** (`IdentityService.DeleteUserAndDataAsync`): inside the execution strategy, one transaction: `Tasks.Where(UserId).ExecuteDeleteAsync()`, `TaskLists.Where(UserId).ExecuteDeleteAsync()`, `UserManager.DeleteAsync(user)`, commit.
+
+### 10.5 Database migrations (ADR-018, Proposed)
+| Option | Problem |
+|---|---|
+| (a) API migrates at start-up | API identity would need DDL rights (not least privilege); start-up blocked by SQL resume; several replicas start at once; failed migration = unhealthy app. |
+| (b) `deploy.yml` runs a bundle from the GitHub runner | Deploy identity (ADR-005) has no SQL data-plane access; SQL firewall would have to admit GitHub runner IPs; CI identity gains DDL rights on production data. |
+| (c) Idempotent SQL script | Same network/identity problems as (b), plus a separate tool to run it. |
+| **(d) Chosen: EF Core migration bundle in a Container Apps Job** | Runs inside Azure with its own identity; see below. |
+
+- Migrations live in `MyTodoApp.Infrastructure/Persistence/Migrations`, created with `dotnet ef migrations add <Name> --project src/backend/MyTodoApp.Infrastructure --startup-project src/backend/MyTodoApp.Api`. Each schema change PR includes its migration.
+- Image `mytodoapp-migrate` (`src/backend/Migrate.Dockerfile`): SDK stage runs `dotnet ef migrations bundle --self-contained -r linux-x64`; runtime stage `runtime-deps:10.0` + `go-sqlcmd`, non-root. Entrypoint: (1) `sqlcmd` runs `infra/sql/grant-api-user.sql` (idempotent: create `id-mytodoapp-api` DB user `FROM EXTERNAL PROVIDER WITH OBJECT_ID` = API identity principal id, add to `db_datareader` + `db_datawriter`), (2) `./efbundle --connection "$ConnectionStrings__AppDb"`.
+- Job `caj-mytodoapp-migrate` runs as `id-mytodoapp-migrate`. EF Core's migration lock prevents concurrent runs.
+- `deploy.yml` starts the job **after** pushing images and **before** switching the API to the new image; a failed migration stops the deployment with the old version still serving.
+- **Migrations must be backward compatible** with the previous API version (expand/contract: add columns nullable or with defaults, drop in a later release), because the old revision serves while the job runs.
+- Cold start: the bundle's connection uses `Connect Timeout=60` and EF retry; the job retry limit is 1.
+- Locally: compose service `migrate` (same image, SQL auth) or `dotnet ef database update`. Integration tests apply migrations with `Database.MigrateAsync()`.
+
+### 10.6 Azure SQL authentication (ADR-019, Proposed)
+- **Entra-only authentication** (`azureADOnlyAuthentication: true`); no SQL logins or passwords anywhere in Azure.
+- **Entra admin:** security group **`sg-mytodoapp-sql-admins`** (`principalType: Group`); members: the owner and `id-mytodoapp-migrate`. Group object id: Bicep param `sqlAdminGroupObjectId` from GitHub repo variable `SQL_ADMIN_GROUP_OBJECT_ID` (an identifier, not a secret).
+- **Database users** (least privilege):
+  | Identity | DB roles | Created by |
+  |---|---|---|
+  | `id-mytodoapp-api` | `db_datareader`, `db_datawriter` (no DDL) | migration job, `grant-api-user.sql`, every run (idempotent) |
+  | `id-mytodoapp-migrate` | server Entra admin (via group) | owner adds it to the group once |
+  | `id-mytodoapp-web` | none | |
+- `WITH OBJECT_ID = '<principalId>'` avoids giving the SQL server Microsoft Graph "Directory Readers" permissions.
+- **One-time owner steps** (Entra directory objects, not Azure resources): create the group, add yourself, set `SQL_ADMIN_GROUP_OBJECT_ID`; after the first deployment creates `id-mytodoapp-migrate`, add it to the group and re-run the failed migration step. Before that, the first deployment's migration step fails (expected once).
+- API connection string (no secret): `Server=tcp:sql-mytodoapp-<sfx>.database.windows.net,1433;Database=sqldb-mytodoapp;Authentication=Active Directory Managed Identity;User Id=<id-mytodoapp-api clientId>;Encrypt=True;Connect Timeout=60`.
+- Network: public endpoint with only the "Allow Azure services" firewall rule (Consumption Container Apps have no fixed outbound IP). No client-IP rules in Bicep (public repo). Private endpoint + VNet is a later option (cost).
+
+### 10.7 Configuration and secrets
+No secrets in the repo or in Azure config: SQL uses managed identity; Data Protection keys are in the database (ADR-020).
+
+| Container | Setting (env var) | Value / source |
+|---|---|---|
+| api | `ASPNETCORE_ENVIRONMENT` | `Production` |
+| api | `ConnectionStrings__AppDb` | composed in Bicep (10.6), API identity client id |
+| api | `AllowedHosts` | API internal FQDN (Bicep) |
+| api | `ForwardedHeaders__ForwardLimit` | `2` (verify, 10.2) |
+| api | `Logging__Console__FormatterName` | `json` |
+| web | `API_UPSTREAM` | `https://` + API ingress FQDN (Bicep) |
+| migrate | `ConnectionStrings__AppDb` | as API, but migrate identity client id |
+| migrate | `API_DB_USER`, `API_PRINCIPAL_ID` | `id-mytodoapp-api`, its principal id (Bicep) |
+
+- GitHub: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (ADR-005); variable `SQL_ADMIN_GROUP_OBJECT_ID`.
+- Bicep: `infra/core.bicep`, `infra/apps.bicep`, `infra/modules/*.bicep`, parameter files `*.bicepparam`; image tags are deployment parameters.
+- Frontend build-time: `VITE_API_BASE_URL` (default `/api/v1`). No runtime config file needed.
+- **Data Protection:** `AddDataProtection().SetApplicationName("MyTodoApp").PersistKeysToDbContext<AppDbContext>()`, so cookies survive restarts, scale-to-zero and new revisions.
+
+**Local development**
+- `compose.yaml` (repo root): `sql` (`mcr.microsoft.com/mssql/server:2022-latest`, port 1433), `migrate`, `api` (host port 5080), `web` (nginx image, host port 8080, `API_UPSTREAM=http://api:8080`). Local SA password in `.env` (git-ignored; `.env.example` committed with a placeholder). `docker compose up --build` gives the production topology at `http://localhost:8080`.
+- Inner loop: `docker compose up sql migrate`, then `dotnet run --project src/backend/MyTodoApp.Api` (`http://localhost:5080`, connection string in `dotnet user-secrets`) and `npm run dev` in `src/frontend` (Vite `:5173`, `server.proxy['/api'] → http://localhost:5080`).
+- Secure cookies work on `http://localhost` in Chromium and Firefox (localhost is a secure context); use one of them for local work.
+- OpenAPI (`/openapi/v1.json`) is mapped in Development only.
+
+### 10.8 Frontend architecture
+```
+src/frontend/
+  Dockerfile  nginx/default.conf.template  vite.config.ts  index.html  public/ (icons)
+  src/
+    main.tsx
+    app/        App.tsx, router.tsx, providers.tsx (QueryClient), RequireAuth.tsx, layout/ (AppShell, Sidebar, BottomNav, TopBar)
+    features/
+      auth/     api.ts, hooks.ts (useMe, useLogin, useRegister, useLogout), LoginPage, RegisterPage
+      account/  AccountPage, DeleteAccountDialog
+      lists/    api.ts, hooks.ts, types.ts, ListsPage, ListPage, ListDialog
+      tasks/    api.ts, hooks.ts, types.ts, TaskRow, TaskDialog, QuickAdd
+      views/    TodayPage, UpcomingPage, CompletedPage
+      privacy/  PrivacyPage
+    shared/
+      api/      client.ts (apiFetch), errors.ts (ApiError, ProblemDetails), queryKeys.ts
+      ui/       Button, Dialog (native <dialog>), Toast, Skeleton, OfflineBanner
+      hooks/    useOnlineStatus, useTimeZone
+      lib/      dates.ts (todayIn(tz), parseDateOnly, formatting)
+      pwa/      useServiceWorkerUpdate.ts, clearClientData.ts
+    test/       setup.ts, renderWithProviders.tsx
+```
+- **Routing:** React Router `createBrowserRouter`, routes per 6.1, pages lazy-loaded. `RequireAuth` uses `useMe()`; `returnUrl` validated (relative, starts with `/`, not `//`).
+- **Styling:** CSS Modules + CSS custom properties (built into Vite). No UI library, no CSS-in-JS that injects `<style>` tags (CSP).
+- **API client `apiFetch<T>(path, init)`:** base `import.meta.env.VITE_API_BASE_URL ?? '/api/v1'`; `credentials: 'same-origin'`; JSON body + `Content-Type: application/json`; timeout 90 s (`AbortSignal`); `204` → `undefined`; non-2xx → parses `application/problem+json` and throws `ApiError { status, title, detail?, errors?: Record<string, string[]>, traceId? }`; fetch failure → `NetworkError` (switches UI to offline mode, 7.5).
+- **Date-only values:** never `new Date('YYYY-MM-DD')` (parses as UTC, off by one day). Use `shared/lib/dates.ts`.
+- **TanStack Query:**
+  | Key | Data |
+  |---|---|
+  | `['auth','me']` | current user (`retry: false`; `401` → `null`) |
+  | `['lists']`, `['lists', id]` | lists, one list |
+  | `['tasks','list', listId, status]` | list view |
+  | `['tasks','today', tz, localDate]`, `['tasks','upcoming', tz, localDate]` | smart views (local date in the key → refetch after midnight) |
+  | `['tasks','completed']`, `['tasks','detail', id]` | |
+  - Invalidation: any task mutation → `['tasks']` + `['lists']` (counts). List create/rename → `['lists']`; list delete → `['lists']` + `['tasks']`.
+  - Complete/uncomplete is optimistic (6.4): cancel `['tasks']` queries, remove/update the task in cached views, roll back on error, invalidate on settle.
+  - Defaults: `staleTime` 30 s, `refetchOnWindowFocus: true`, queries `networkMode: 'offlineFirst'` (so offline requests still reach the service worker cache), retry once only on `NetworkError`/timeout/`503`, never on 4xx.
+  - Global `QueryCache`/`MutationCache` `onError`: `401` (except from `me`/`login`) → `clearClientData()` + navigate to `/login?returnUrl=...`.
+- **`clearClientData()`:** `queryClient.clear()` + `caches.delete('api-v1')`. Called on sign-out, account deletion and `401`.
+- **PWA (vite-plugin-pwa):** `registerType: 'prompt'`, `injectRegister: false` (register via `virtual:pwa-register/react`, no inline script), manifest per 7.5. Workbox: precache all build output (app shell incl. the Privacy chunk); `navigateFallback: 'index.html'`, deny-list `^/api/`, `^/health`, `^/healthz`; runtime caching for same-origin `GET /api/v1/*`: `NetworkFirst`, `cacheName: 'api-v1'`, `networkTimeoutSeconds: 10`, `maxEntries: 100`, `maxAgeSeconds: 604800`, `cacheableResponse.statuses: [200]`. Non-GET requests are not cached.
+
+### 10.9 Containers
+| | API (`src/backend/MyTodoApp.Api/Dockerfile`, context `src/backend`) | Web (`src/frontend/Dockerfile`, context `src/frontend`) |
+|---|---|---|
+| Build stage | `mcr.microsoft.com/dotnet/sdk:10.0`, `dotnet publish -c Release` | `node:24-alpine`, `npm ci && npm run build` |
+| Runtime | `mcr.microsoft.com/dotnet/aspnet:10.0` (regular, has ICU + tzdata) | `nginxinc/nginx-unprivileged:stable-alpine` |
+| User | non-root `USER $APP_UID` | non-root (uid 101) |
+| Port | 8080 (`ASPNETCORE_HTTP_PORTS=8080`) | 8080 |
+| Probes | liveness + readiness `GET /health`; startup probe `GET /health` (period 3 s, failure threshold 20) | liveness + readiness `GET /healthz` (`location = /healthz { access_log off; return 200; }`) |
+| Resources | 0.25 vCPU / 0.5 GiB | 0.25 vCPU / 0.5 GiB |
+| Scale | min **0**, max 2, HTTP rule 50 concurrent requests | min **0**, max 2, HTTP rule 50 concurrent requests |
+
+Migration image: see 10.5 (0.5 vCPU / 1 GiB).
+
+**nginx (web) essentials:**
+- SPA fallback: `location / { try_files $uri $uri/ /index.html; }`; `/api/` proxy as in 10.2.
+- Caching: `/assets/*` → `Cache-Control: public, max-age=31536000, immutable`; `index.html`, `sw.js`, `registerSW.js`, `workbox-*.js`, `manifest.webmanifest` → `Cache-Control: no-cache`.
+- Security headers on every response (`add_header ... always`):
+  - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`
+  - `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`/`preload`: the domain is Azure's).
+- `server_tokens off`; JSON access log to stdout.
+
+**Cold start:** after idle, the first request may wait for the web replica, the API replica and SQL resume (up to ~1 min). Accepted (ADR-001, 7.4); nginx and the client timeouts are sized for it.
+
+### 10.10 CI/CD (ADR-023, Proposed)
+**`ci.yml`** (pull requests to `main`; always runs, so required checks never stay "pending"):
+| Job | Runs when | Steps |
+|---|---|---|
+| `changes` | always | `git diff --name-only` vs base → flags `backend`, `frontend`, `infra`, `e2e` (no third-party action) |
+| `backend` | backend/tests changed | setup-dotnet (`global.json`), `dotnet restore`, `dotnet build -c Release`, `dotnet format --verify-no-changes`, `dotnet test -c Release` (Docker is available on `ubuntu-latest` for Testcontainers) |
+| `frontend` | frontend changed | setup-node 24, `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` |
+| `infra` | `infra/` changed | `az bicep build` + `az bicep lint` for each entry file (no Azure login) |
+| `images` | Dockerfiles or app code changed | `docker build` of api, web, migrate (no push) |
+| `e2e` | app or `tests/e2e` changed, once `tests/e2e` exists | `docker compose up --build -d`, Playwright, upload report on failure |
+| `ci-ok` | always (`needs:` all, `if: always()`) | fails if any needed job failed/cancelled; skipped is OK. **This is the single required status check.** |
+
+**`deploy.yml`** (push to `main`, `paths-ignore: docs/**, **/*.md`; plus `workflow_dispatch`; `permissions: id-token: write, contents: read`; `concurrency: deploy-production`, no cancel-in-progress):
+1. `azure/login` (OIDC).
+2. Deploy `infra/core.bicep`: Log Analytics, environment, ACR, identities + AcrPull assignments, SQL server/database. Outputs feed later steps.
+3. Build and push `mytodoapp-{api,web,migrate}:<sha>`.
+4. Deploy `infra/apps.bicep`: migrate job with the **new** image; API and web with their **currently running** images (read with `az containerapp show`; new SHA on first deployment).
+5. Start `caj-mytodoapp-migrate`, poll the execution until `Succeeded` (timeout 10 min); on failure stop.
+6. `az containerapp update --image ...:<sha>` for the API, then the web app.
+7. Smoke test with retries for cold start (≤ 3 min): `GET https://<web>/healthz` → 200 and `GET https://<web>/api/v1/auth/me` → 401 (proves nginx → API).
+- Single production target in v1. **Don't add `environment: production` to the job**: it changes the OIDC subject to `...:environment:production`, which the federated credential (ADR-005, `ref:refs/heads/main`) doesn't trust. Adding a GitHub environment later needs a new federated credential + ADR.
+- Rollback = revert PR (redeploys the previous code; migrations are backward compatible).
+- `az config set extension.use_dynamic_install=yes_without_prompt` for the `containerapp` CLI extension.
+
+### 10.11 Observability
+- Container Apps ship stdout/stderr to `log-mytodoapp` (`ContainerAppConsoleLogs_CL`, `ContainerAppSystemLogs_CL`), retention 30 days.
+- API: JSON console formatter with scopes (trace id). Levels: `Default` Information, `Microsoft.AspNetCore` Warning, `Microsoft.EntityFrameworkCore` Warning. No `UseHttpLogging`, never `EnableSensitiveDataLogging` outside tests.
+- Logged events: unexpected exceptions (Error, trace id, also returned as ProblemDetails `traceId`), account deleted (Information, user id), rate-limit rejections (Warning), migration job output.
+- **No PII:** no emails, passwords, cookies, list names, task titles/notes. Ids only.
+- Health: `/health` (API, no DB check) and `/healthz` (nginx) for probes only.
+- Later (needs an ADR + package approval): Application Insights via Azure Monitor OpenTelemetry, alerts.
+
+### 10.12 Testing strategy (ADR-022, Proposed)
+| Level | Project / tool | What | Notes |
+|---|---|---|---|
+| Domain unit | `MyTodoApp.Domain.UnitTests` (xUnit v3) | entity rules: Inbox guards, complete/uncomplete, trimming, ranges | pure, no I/O |
+| Handler unit | `MyTodoApp.Application.UnitTests` | every handler: happy path, not found / not owned, conflicts, sorting, `truncated`, today boundaries | real `AppDbContext` on **SQLite in-memory** (one open connection per test, `EnsureCreated`); fast, relational, no Docker. SQL Server-specific behaviour (case-insensitive uniqueness, cascades, filtered index, migrations) is **not** asserted here |
+| API integration | `MyTodoApp.Api.IntegrationTests` (`WebApplicationFactory`) | every endpoint: happy path, main failure, other user's data invisible (404); auth, 401, 429, ProblemDetails shapes, JSON formats | **SQL Server via Testcontainers** (`mcr.microsoft.com/mssql/server:2022-latest`): one container per test assembly (assembly fixture), one fresh database per test class created with `MigrateAsync()`; each test registers its own users. Cookie-aware `HttpClient` with `BaseAddress = https://localhost` (Secure cookie). Rate limit raised via config except in the 429 test |
+| Frontend | Vitest + React Testing Library + jsdom | components, hooks, `apiFetch` error mapping, date helpers, offline state | `fetch` stubbed (`vi.stubGlobal`) or API modules mocked; `renderWithProviders` (QueryClient with `retry: false`, `MemoryRouter`); fake timers + explicit time zone |
+| E2E | Playwright (`tests/e2e`) | main journeys: register → add task → Today → complete → Completed; lists CRUD; delete account; offline banner | against `docker compose up --build` at `http://localhost:8080` (real nginx proxy); Chromium desktop + mobile viewport; unique user per test; accessibility checks with axe |
+
+- **Deterministic time:** a hand-written `FixedTimeProvider : TimeProvider` (overrides `GetUtcNow()`, settable) in each test project's `Common/`; integration tests swap it in via `ConfigureTestServices`. No real clock, no real network (containers are local).
+- Test naming per `CLAUDE.md`. No assertion or mocking library (FluentAssertions v8 is commercial): xUnit `Assert` and hand-written fakes.

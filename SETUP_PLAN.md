@@ -56,8 +56,8 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
 
 ## Phase 4: Specification (architect agent)
 
-- [ ] 4.1 Architect writes `docs/SPEC.md`: features, data model, API endpoints, UI pages.
-- [ ] 4.2 Architect writes the architecture section and records choices in `docs/DECISIONS.md`.
+- [x] 4.1 Architect writes `docs/SPEC.md`: features, data model, API endpoints, UI pages.
+- [x] 4.2 Architect writes the architecture section and records choices in `docs/DECISIONS.md`.
 - [ ] 4.3 **[HUMAN]** I review and approve the spec.
 - [ ] 4.4 Architect creates 5–10 small GitHub issues with labels and acceptance criteria.
 

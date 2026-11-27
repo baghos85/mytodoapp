@@ -1,6 +1,6 @@
 # MyTodoApp: Specification
 
-> **Status:** Draft v1, written by the architect agent (setup step 4.1). Awaiting owner approval (step 4.3).
+> **Status:** v1, written by the architect agent (setup step 4.1); owner answers to the open questions applied 2026-11-27. Awaiting final owner approval (step 4.3).
 > This file is the single source of truth for *what* we build. Frontend and backend agents build against the API contract below, so keep it precise.
 
 ## 1. Overview
@@ -19,6 +19,8 @@ IDs (e.g. `A1`) are used to reference stories from GitHub issues. Everything in 
 | A3 | As a user, I can sign out, which ends my session and clears data cached on this device. |
 | A4 | As a user, I can see which account I'm signed in with (email in the account menu). |
 | A5 | As a user, I only ever see my own lists and tasks. |
+| A6 | As a user, I can permanently delete my account from the Account page, confirming with my current password. All my lists and tasks are deleted, I'm signed out and taken to the login page. |
+| A7 | As a visitor or user, I can read a privacy notice explaining what data is stored, why, where, for how long, and how to delete my account. |
 
 ### 2.2 Lists
 | ID | User story |
@@ -108,6 +110,7 @@ Suggested indexes: `TodoTask (UserId, IsCompleted, DueDate)`, `TodoTask (ListId,
 - Deleting a list deletes all its tasks (database cascade). The Inbox cannot be deleted, so the user always has at least one list.
 - Limits (to keep v1 free of pagination): **max 100 lists per user**. Task count is not capped, but collection endpoints return at most **500 tasks** (see 4.1).
 - No soft delete, no audit history, no optimistic concurrency in v1 (last write wins).
+- **Account deletion** (endpoint 21) removes the user's tasks, then lists, then the Identity user, in **one transaction**. Tasks are deleted explicitly because `TodoTask.UserId` has no cascade. Nothing is kept in the live database; backups keep it for up to 7 days (section 7.8).
 
 ## 4. API contract
 
@@ -165,6 +168,7 @@ Suggested indexes: `TodoTask (UserId, IsCompleted, DueDate)`, `TodoTask (ListId,
 | 2 | POST | `/api/v1/auth/login?useCookies=true` | anonymous | 200 | Sign in, sets cookie (Identity) |
 | 3 | POST | `/api/v1/auth/logout` | anonymous | 204 | Sign out, clears cookie |
 | 4 | GET | `/api/v1/auth/me` | required | 200 | Current user |
+| 21 | DELETE | `/api/v1/auth/me` | required | 204 | Delete my account and all my data, sign out |
 | 5 | GET | `/api/v1/task-lists` | required | 200 | All my lists |
 | 6 | GET | `/api/v1/task-lists/{listId}` | required | 200 | One list |
 | 7 | POST | `/api/v1/task-lists` | required | 201 | Create list |
@@ -183,9 +187,9 @@ Suggested indexes: `TodoTask (UserId, IsCompleted, DueDate)`, `TodoTask (ListId,
 | 20 | GET | `/health` | anonymous | 200 | Liveness/readiness probe |
 
 ### 4.4 Accounts (`/api/v1/auth`)
-Endpoints 1–2 are the built-in ASP.NET Core Identity API endpoints (`app.MapGroup("/api/v1/auth").MapIdentityApi<User>()`); their request/response shapes are defined by the framework and summarised here. `auth` is a deliberate exception to the plural-noun route rule. Endpoints 3–4 are ours.
+Endpoints 1–2 are the built-in ASP.NET Core Identity API endpoints (`app.MapGroup("/api/v1/auth").MapIdentityApi<User>()`); their request/response shapes are defined by the framework and summarised here. `auth` is a deliberate exception to the plural-noun route rule. Endpoints 3, 4 and 21 are ours.
 
-The other endpoints that `MapIdentityApi` maps (`/refresh`, `/confirmEmail`, `/resendConfirmationEmail`, `/forgotPassword`, `/resetPassword`, `/manage/info`, `/manage/2fa`) are **not part of v1 and must return `404`** (e.g. via an allow-list endpoint filter on the group). Bearer-token login (`useCookies` absent/false) is not supported: the API authenticates with the Identity application cookie only.
+The other endpoints that `MapIdentityApi` maps (`/refresh`, `/confirmEmail`, `/resendConfirmationEmail`, `/forgotPassword`, `/resetPassword`, `/manage/info`, `/manage/2fa`) are **not part of v1 and must return `404`** (e.g. via an allow-list endpoint filter on the group). Bearer-token login (`useCookies` absent/false) is not supported in v1: the API authenticates with the Identity application cookie only. The API code must still be auth-scheme agnostic (see 7.1).
 
 **1. POST `/api/v1/auth/register`** (anonymous, rate-limited)
 | | |
@@ -213,6 +217,14 @@ The other endpoints that `MapIdentityApi` maps (`/refresh`, `/confirmEmail`, `/r
 |---|---|
 | Success | `200 OK` `{ "id": string (uuid), "email": string }` |
 | Errors | `401` if not signed in (the frontend uses this to decide whether to show the login page). |
+
+**21. DELETE `/api/v1/auth/me`** (delete my account; rate-limited with the same policy as register/login)
+| | |
+|---|---|
+| Request | `{ "password": string }`: the current password, required. Bound explicitly with `[FromBody]` (Minimal APIs don't infer a body for DELETE). |
+| Behaviour | Verifies the password (`UserManager.CheckPasswordAsync`). Then, in one transaction, permanently deletes all the user's tasks, all their lists and the Identity user. Then signs out (cookie expired). Logs an information event with the user id only (no email). |
+| Success | `204 No Content`. |
+| Errors | `400` ValidationProblemDetails: `errors.password` = `"Password is required."` or `"Incorrect password."` (nothing is deleted). `401` not signed in. `429`. |
 
 ### 4.5 Task lists (`/api/v1/task-lists`)
 
@@ -352,7 +364,8 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 
 ### 5.6 Account security rules
 - Lockout: Identity defaults: **5** failed logins → locked out for **5 minutes**.
-- Rate limit (built-in ASP.NET Core rate limiter, no extra package): `register` and `login` share a fixed window of **10 requests per minute per client IP** → `429`. Client IP comes from `X-Forwarded-For` set by the Container Apps ingress (forwarded headers configured).
+- **Registration is open** to anyone (no invite or allow-list). Abuse is limited by the rate limit and lockout below.
+- Rate limit (built-in ASP.NET Core rate limiter, no extra package): `register`, `login` and `DELETE /auth/me` share a fixed window of **10 requests per minute per client IP** → `429`. Client IP comes from `X-Forwarded-For` set by the Container Apps ingress (forwarded headers configured).
 
 ## 6. UI pages
 
@@ -361,6 +374,8 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 |---|---|---|
 | `/login` | public | Sign in |
 | `/register` | public | Create account |
+| `/privacy` | public (works signed in or out) | Privacy notice |
+| `/account` | required | Account settings: email, sign out, delete account |
 | `/` | required | Redirects to `/today` |
 | `/today` | required | Today view |
 | `/upcoming` | required | Upcoming view |
@@ -373,15 +388,26 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 - Any `401` from the API later (session expired) clears cached data and redirects to `/login?returnUrl=...`.
 
 ### 6.2 Layout
-- **Desktop (≥ 1024 px):** persistent left sidebar with: Today, Upcoming, Completed (with open-task count for Today), a "Lists" section (Inbox first, then other lists, each with open-task count), "+ New list", and at the bottom an account menu (email, "Sign out"). Main content on the right.
+- **Desktop (≥ 1024 px):** persistent left sidebar with: Today, Upcoming, Completed (with open-task count for Today), a "Lists" section (Inbox first, then other lists, each with open-task count), "+ New list", and at the bottom an account menu (email, "Account", "Sign out") and a small footer link "Privacy". Main content on the right.
 - **Tablet (640–1023 px):** same sidebar, collapsible as a drawer behind a menu button.
-- **Mobile (< 640 px):** top app bar (page title, actions menu); **bottom navigation** with Today, Upcoming, Completed, Lists. The account menu (email, sign out) is in the top bar.
+- **Mobile (< 640 px):** top app bar (page title, actions menu); **bottom navigation** with Today, Upcoming, Completed, Lists. The account menu (email, "Account", "Sign out") is in the top bar. The Privacy link is on the Account page.
 - The task dialog (create/edit) is a centred modal on desktop and a full-screen sheet on mobile.
 
 ### 6.3 Pages
-**Login (`/login`)**: email, password, "Sign in" button, link to Register. Inline field validation (required, email format). On `401 Failed`: "Invalid email or password." On `LockedOut`: "Too many attempts. Try again in a few minutes." On `429`: "Too many attempts. Please wait a minute." On success go to `returnUrl` or `/today`.
+**Login (`/login`)**: email, password, "Sign in" button, link to Register, footer link "Privacy" (`/privacy`). Inline field validation (required, email format). On `401 Failed`: "Invalid email or password." On `LockedOut`: "Too many attempts. Try again in a few minutes." On `429`: "Too many attempts. Please wait a minute." On success go to `returnUrl` or `/today`.
 
-**Register (`/register`)**: email, password, confirm password (client-side match check only), the password rules shown as helper text. Server errors are shown at the relevant field (`DuplicateUserName`/`DuplicateEmail` → "An account with this email already exists."). On success call login automatically, then go to `/today`.
+**Register (`/register`)**: email, password, confirm password (client-side match check only), the password rules shown as helper text. Server errors are shown at the relevant field (`DuplicateUserName`/`DuplicateEmail` → "An account with this email already exists."). On success call login automatically, then go to `/today`. Below the form: "By creating an account you agree that we store your data as described in the Privacy notice." with a link to `/privacy`.
+
+**Account (`/account`)**: shows the signed-in email, a "Sign out" button, a link to the Privacy notice, and a "Danger zone" with a **"Delete my account"** button. That button opens a confirmation dialog: "This permanently deletes your account, all your lists and all your tasks. This can't be undone." plus a required **password** field and a destructive "Delete my account" button (disabled until a password is entered and while submitting). `400 Incorrect password` → error at the password field. On `204`: clear the TanStack Query cache and the service worker API cache, then go to `/login` with a status message "Your account has been deleted." Disabled when offline.
+
+**Privacy (`/privacy`)**: static page, reachable signed in or out, precached for offline. Plain-language content that must cover:
+- **What is stored:** email address, password hash (never the password itself), and the lists and tasks you create (names, titles, notes, due dates, priorities, completion state, timestamps). A sign-in cookie is used only to keep you signed in (strictly necessary, no tracking or analytics cookies).
+- **Why:** only to provide the app (your account and your tasks). No sharing, selling, advertising or analytics.
+- **Where:** Microsoft Azure, EU region **France Central**.
+- **Retention:** until you delete your account. After deletion, database backups keep the data for up to **7 days**, then it is gone.
+- **Logs:** application logs contain technical data (ids, errors, request metadata) and **no email addresses or task/list content**.
+- **How to delete your account:** Account page → "Delete my account" → confirm with your password. Deletion is immediate and permanent.
+- Data export is not available yet.
 
 **Today (`/today`)**: two sections, "Overdue" (only if not empty) and "Today". Each task row: completion checkbox, title, priority indicator (icon + text label, not colour only), list name, and due-date label for overdue tasks. Inline **quick add** at the top (title + Enter) creates the task in the **Inbox** with `dueDate = today`. Empty state: "Nothing due today. Enjoy your day!"
 
@@ -417,11 +443,15 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 ## 7. Non-functional requirements
 
 ### 7.1 Authentication, cookies and origins
-- **Same-origin deployment (recommended):** the browser talks **only to the frontend container**. Its web server (e.g. nginx) serves the SPA and **reverse-proxies `/api/*` to the API container** over Container Apps internal networking. The API container uses **internal-only ingress** (not reachable from the internet). The `/health` endpoint is probed by the platform directly.
+- **Same-origin deployment (owner-approved):** the browser talks **only to the frontend container**. Its **nginx** serves the SPA and **reverse-proxies `/api/*` to the API container** over Container Apps internal networking. The API container uses **internal-only ingress** (not reachable from the internet). The `/health` endpoint is probed by the platform directly.
   - Why: the auth cookie is first-party, so it works even where third-party cookies are blocked (Safari, and increasingly Chrome); `SameSite=Strict` is possible; **no CORS** configuration is needed; the API's attack surface is smaller.
   - The frontend uses a configurable API base URL (`VITE_API_BASE_URL`, default `/api/v1`), never hard-coded. Local development uses the Vite dev-server proxy for `/api` to the local API.
-  - Alternative (not recommended): public API with CORS (`AllowCredentials`, explicit frontend origin) and `SameSite=None` cookies, which third-party-cookie blocking can break. See Open questions.
+  - The API has **no CORS** configuration.
 - **Auth cookie:** Identity application cookie, name `MyTodoApp.Auth`, `HttpOnly`, `Secure` (always), `SameSite=Strict`, `Path=/`, no `Domain`. Persistent, **14-day sliding expiration**. API requests that are not authenticated get `401` (no redirect to a login page); forbidden gets `403`.
+- **Auth-scheme agnostic API:** v1 uses cookies only, but bearer tokens (Identity bearer tokens or JWT via OIDC) may be enabled later for a mobile client alongside cookies. So:
+  - Endpoints declare auth only with `RequireAuthorization()` / `[Authorize]` (or the group's default policy), never with a scheme-specific check.
+  - Handlers and Application code get the user **only through `ICurrentUser`** (implemented in Api/Infrastructure from `HttpContext.User` claims).
+  - No code reads the auth cookie or the `Cookie` header directly, or assumes the request was cookie-authenticated. The only cookie-specific code is the Identity/cookie configuration in DI composition and the sign-in/sign-out calls in the auth endpoints.
 - **CSRF:** no antiforgery tokens in v1. Protection relies on `SameSite=Strict` + same origin + no CORS, and endpoints with bodies accepting only `application/json` (Minimal APIs reject other content types with `415`).
 
 ### 7.2 Security
@@ -430,7 +460,7 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 - No secrets in code or config; Azure SQL is accessed with managed identity.
 - Frontend web server sets security headers: `Content-Security-Policy` (`default-src 'self'`; no inline scripts; `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Strict-Transport-Security`. HTTPS only (Container Apps ingress, HTTP redirected or disabled).
 - Task notes are rendered as plain text (React escaping), never as HTML.
-- On sign out (and on `401`), the client clears the TanStack Query cache and the service worker's API cache, so the next user on a shared device sees nothing.
+- On sign out, account deletion and `401`, the client clears the TanStack Query cache and the service worker's API cache, so the next user on a shared device sees nothing.
 - Known v1 limitation: registration reveals whether an email is already registered (Identity `DuplicateUserName`). Accepted for v1 because there is no email confirmation.
 
 ### 7.3 Accessibility
@@ -465,33 +495,40 @@ Latest two major versions of Chrome, Edge, Firefox and Safari (macOS and iOS/iPa
 - **Never log** passwords, cookies, email addresses or task/list content. Log ids instead.
 - `/health` endpoint as in 4.8 for liveness/readiness probes.
 
+### 7.8 Privacy (GDPR)
+- Data is stored only in Azure, EU region France Central (Azure SQL, Log Analytics).
+- Data minimisation: only email, password hash (plus Identity's security fields) and the user's own lists and tasks. No analytics, tracking or third-party scripts.
+- Right to erasure: self-service account deletion (A6, endpoint 21), effective immediately in the live database. Azure SQL backups (point-in-time restore) keep deleted data for **up to 7 days**. The infra must set backup retention to 7 days to match the privacy notice.
+- Right to be informed: the public `/privacy` page (6.3).
+- Logs contain no email addresses or task/list content (7.7).
+
 ## 8. Out of scope (v1)
 - Search; dark mode / themes; localisation (English only).
 - Sharing lists or tasks, collaboration, multiple users per list.
 - Reminders, notifications (push or email), recurring tasks, subtasks, attachments, tags/labels, task due **times**.
 - Manual drag-and-drop ordering of tasks or lists; custom sort options.
 - Email confirmation, password reset / forgot password, change password, change email, two-factor authentication, external logins (Google, Microsoft...), "remember me" toggle.
-- Account deletion and data export.
+- Data export (GDPR data portability): planned as a future item.
 - Offline editing, background sync, conflict resolution.
 - Pagination / infinite scroll (caps in 3.4 and 4.1 instead).
 - Bulk actions (complete/delete many), archiving lists, undo for deletes.
-- Public API for third parties, bearer-token auth, native mobile apps.
+- Public API for third parties, bearer-token auth (the API stays scheme-agnostic so it can be added later, see 7.1), native mobile apps.
 - Admin UI, analytics, usage tracking.
 
 ## 9. Open questions
 
-1. **Same-origin proxy vs CORS:** OK to have the frontend container reverse-proxy `/api` to an internal-only API container (7.1)? The alternative is a public API with CORS + `SameSite=None` cookies, which is more fragile with third-party-cookie blocking.
-2. **Open registration:** anyone on the internet can create an account. Is that intended, or should v1 be restricted (e.g. invite-only or an allow-list of emails)?
-3. **Account deletion:** excluded from v1 (section 8). Since users are in the EU (GDPR right to erasure), do you want a simple "Delete my account" in v1?
-4. **Limits:** are 100 lists per user and 500 tasks per view response (no pagination) acceptable for v1?
-5. **Upcoming horizon:** confirm "no horizon" (all future-dated open tasks) rather than the next 7 days.
+None at the moment. The owner answered the first round on 2026-11-27 (same origin: yes; open registration: yes; account deletion + privacy page: in v1, data export out; limits: kept; Upcoming: no horizon).
 
 **Decisions to record as ADRs in 4.2**
-- Same-origin deployment: frontend reverse-proxies `/api` to an internal-only API; Identity cookie auth (`SameSite=Strict`, no CORS, no antiforgery tokens); only register/login of `MapIdentityApi` exposed, plus custom logout/me.
+- Same-origin deployment: nginx in the frontend container reverse-proxies `/api` to an API with internal-only ingress; no CORS; Vite dev-server proxy locally.
+- Cookie-only auth in v1 (Identity application cookie, HttpOnly, Secure, `SameSite=Strict`, no antiforgery tokens); only register/login of `MapIdentityApi` exposed, plus custom logout, me and delete-me.
+- Auth-scheme agnostic API: `RequireAuthorization()`/`[Authorize]` only, user via `ICurrentUser` only, no direct cookie access, so bearer tokens (Identity bearer or JWT via OIDC) can be added later for a mobile client.
+- Open registration, protected by rate limiting (10/min/IP) and Identity lockout.
+- GDPR: self-service account deletion with password confirmation (hard delete in one transaction), public privacy notice, 7-day SQL backup retention; data export deferred.
 - Every task belongs to a list; default Inbox created atomically at registration, cannot be renamed/deleted.
 - Due dates are `DateOnly`; "today" computed per request from the browser's IANA time zone (`timeZone` query parameter); Today includes overdue; Upcoming has no horizon.
 - Denormalised `UserId` on tasks (no cascade) for simple ownership filtering.
 - Guid v7 ids; enums serialised as camelCase strings.
-- No pagination in v1: collection wrapper objects + caps.
-- Read-only offline via Workbox NetworkFirst runtime cache of `GET /api/v1/*`; caches cleared on sign-out.
+- No pagination in v1: `{ items, truncated }` wrapper, max 100 lists per user, max 500 tasks per response.
+- Read-only offline via Workbox NetworkFirst runtime cache of `GET /api/v1/*`; caches cleared on sign-out, account deletion and `401`.
 - `/health` probes don't touch the database (keeps Azure SQL serverless able to auto-pause).

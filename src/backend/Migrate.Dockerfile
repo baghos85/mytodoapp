@@ -10,6 +10,10 @@ ARG SQLCMD_SHA256=2e41111d2e00782d50b9f8887bf603890af1e85e308708703e4ce27dc3c410
 ADD --checksum=sha256:${SQLCMD_SHA256} \
     https://github.com/microsoft/go-sqlcmd/releases/download/v${SQLCMD_VERSION}/sqlcmd-linux-amd64.tar.bz2 \
     /tmp/sqlcmd.tar.bz2
+# The SDK image has no bzip2; it is needed only in this throwaway stage.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bzip2 \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir /out && tar -xjf /tmp/sqlcmd.tar.bz2 -C /out sqlcmd && /out/sqlcmd --version
 
 # The data model issue adds a stage here that runs

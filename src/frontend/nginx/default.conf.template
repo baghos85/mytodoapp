@@ -1,0 +1,76 @@
+# nginx config for the web container (SPEC 10.2, 10.9). Rendered at start-up by the nginx image's envsubst
+# into /etc/nginx/conf.d/default.conf (inside the http block). Only ${API_UPSTREAM} is substituted.
+#   Azure:  API_UPSTREAM=https://ca-mytodoapp-api.internal.<env-default-domain>
+#   Local:  API_UPSTREAM=http://api:8080
+
+server_tokens off;
+
+# Scheme seen by the browser: from the external ingress if present, else this connection's scheme.
+map $http_x_forwarded_proto $fwd_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+# JSON access log to stdout. $uri (no query string), no cookies or bodies.
+log_format json_access escape=json '{"time":"$time_iso8601","remote_addr":"$remote_addr",'
+    '"method":"$request_method","uri":"$uri","status":$status,"bytes":$body_bytes_sent,'
+    '"request_time":$request_time,"upstream_time":"$upstream_response_time",'
+    '"user_agent":"$http_user_agent"}';
+
+server {
+    listen 8080;
+    listen [::]:8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    access_log /dev/stdout json_access;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json application/manifest+json image/svg+xml;
+    gzip_min_length 1024;
+
+    include /etc/nginx/snippets/security-headers.conf;
+
+    # Probe for the platform (liveness/readiness).
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "OK\n";
+    }
+
+    # Reverse proxy to the API (same origin, ADR-009). No path in proxy_pass: the URI is passed unchanged.
+    location /api/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        # REQUIRED: Container Apps routes by Host, so it must be the API's FQDN. Original host in X-Forwarded-Host.
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 120s; # covers SQL serverless resume (~1 min)
+        client_max_body_size 64k;
+    }
+
+    # Hashed build assets: cache forever.
+    location /assets/ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # App shell and service worker files: always revalidate.
+    location ~ ^/(index\.html|sw\.js|registerSW\.js|workbox-[^/]+\.js|manifest\.webmanifest)$ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri =404;
+    }
+
+    # SPA fallback: unknown paths serve index.html (client-side routing).
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

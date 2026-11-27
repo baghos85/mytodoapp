@@ -1,0 +1,11 @@
+# Build context for the API image (src/backend).
+**/bin/
+**/obj/
+**/*.user
+**/.vs/
+**/TestResults/
+**/appsettings.*.local.json
+**/appsettings.Local.json
+**/Dockerfile
+**/*.Dockerfile
+**/*.dockerignore

@@ -4,7 +4,8 @@
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-# Copy everything (see src/backend/.dockerignore) so Directory.*.props files added later are picked up.
+# Copy everything (see src/backend/.dockerignore), including src/backend/Directory.Build.props and
+# Directory.Packages.props: the repo-root props files only import those and are outside this build context.
 COPY . .
 RUN dotnet restore MyTodoApp.Api/MyTodoApp.Api.csproj
 RUN dotnet publish MyTodoApp.Api/MyTodoApp.Api.csproj -c Release -o /app/publish --no-restore /p:UseAppHost=false

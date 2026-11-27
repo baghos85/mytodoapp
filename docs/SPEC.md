@@ -628,6 +628,7 @@ location /api/ {
 ### 10.3 Backend solution structure
 
 Root files: `MyTodoApp.slnx` (all projects), `global.json` (pins .NET 10 SDK), `Directory.Build.props` (nullable, implicit usings, `TreatWarningsAsErrors`, `InvariantGlobalization=false`), `Directory.Packages.props` (central package versions), `.editorconfig`, `.config/dotnet-tools.json` (`dotnet-ef`).
+- The real settings live in `src/backend/Directory.Build.props` and `src/backend/Directory.Packages.props` (runtime package versions); the root files only `<Import>` them (the root `Directory.Packages.props` adds the test package versions). Reason: the API image is built with context `src/backend` (10.9), which can't see root files. Don't move the settings back to the root. A root `nuget.config` restricts restore to nuget.org (central package management fails with NU1507 when several sources are configured).
 
 | Project | References | Contents |
 |---|---|---|
@@ -659,6 +660,7 @@ Feature and action folder names (use exactly these):
 **DI composition** (`Program.cs`): `builder.Services.AddApplication().AddInfrastructure(builder.Configuration)` plus Api setup methods; endpoints via `app.MapAccountsEndpoints()`, `MapTaskListsEndpoints()`, `MapTasksEndpoints()`, `app.MapHealthChecks("/health")`.
 - `AddApplication()` registers handlers by **reflection scanning** of the Application assembly (plain .NET reflection, no Scrutor): every non-abstract class implementing a closed `ICommandHandler<,>` or `IQueryHandler<,>` is registered **scoped** under that interface. New handlers need no registration edit (fewer merge conflicts between parallel PRs). A unit test asserts every handler resolves; Development uses `ValidateOnBuild`.
 - Endpoints inject the handler interface, e.g. `ICommandHandler<CreateTaskCommand, TaskDto>`.
+- Two command handler shapes: `ICommandHandler<TCommand, TResult>` (`Task<TResult> HandleAsync(...)`, e.g. create → DTO) and `ICommandHandler<TCommand>` (`Task HandleAsync(...)`, for `204` endpoints: rename, delete, complete...). Never invent a `Unit` result type. Both are picked up by the reflection scan.
 
 **`ICurrentUser`** (`Guid UserId { get; }`) is implemented in Api by `HttpCurrentUser` (scoped) from `ClaimTypes.NameIdentifier`; throws `InvalidOperationException` if absent (it's only used behind `RequireAuthorization()`). No other code reads `HttpContext.User`.
 
@@ -670,7 +672,7 @@ Feature and action folder names (use exactly these):
 
 **JSON:** `ConfigureHttpJsonOptions`: `JsonStringEnumConverter(JsonNamingPolicy.CamelCase)`; camelCase is the default. `DateOnly` → `"YYYY-MM-DD"` natively; `DateTime` with `Kind = Utc` → `...Z` (see the UTC converter in 10.4).
 
-**Errors:** `ExceptionHandler` maps `NotFoundException` → 404, `ConflictException` → 409, `ForbiddenException` → 403, `DomainValidationException` → 400 `ValidationProblemDetails` (`errors[field]`), else 500 with `title: "An unexpected error occurred."` + `traceId`, logged at Error with a message template.
+**Errors:** `ExceptionHandler` maps `NotFoundException` → 404, `ConflictException` → 409, `ForbiddenException` → 403, `DomainValidationException` → 400 `ValidationProblemDetails` (`errors[field]`), else 500 with `title: "An unexpected error occurred."` + `traceId`, logged at Error with a message template. Request binding errors (`BadHttpRequestException`: malformed JSON, wrong types, missing body; `ThrowOnBadRequest = true` in every environment) → their own status (400) as ProblemDetails without the framework message and without an Error log. Empty error responses (e.g. the framework's 415 for a non-JSON `Content-Type`) get a ProblemDetails body from status code pages (`StatusCodePagesSetup`); 404 is excluded until the auth issue tightens the deploy smoke test.
 
 ### 10.4 Data access
 - `AppDbContext : IdentityUserContext<User, Guid>, IAppDbContext, IDataProtectionKeyContext` (Infrastructure). `IdentityUserContext` = users, claims, logins, tokens; no role tables (no roles in v1). Identity tables keep their default names (`AspNetUsers`...); ours: `TaskLists`, `Tasks`, `DataProtectionKeys`.

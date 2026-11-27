@@ -29,7 +29,7 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
 - [x] 1.1 Check installed tools: git, gh, az, docker, node/python. List what's missing and give me install commands.
 - [x] 1.2 **[HUMAN]** Run `gh auth login` and `az login`.
 - [x] 1.3 Initialize the git repo, add `.gitignore`, create the GitHub repo with `gh repo create`, and push.
-- [ ] 1.4 Create the Azure resource group (e.g. `rg-<project>`) with `az group create`.
+- [x] 1.4 Create the Azure resource group (e.g. `rg-<project>`) with `az group create`.
 - [ ] 1.5 **[HUMAN]** Set a budget alert on the resource group in the Azure portal.
 - [ ] 1.6 Set up Azure auth for GitHub Actions using OIDC (federated credential) scoped to the resource group only. Prepare the commands for me.
 - [ ] 1.7 **[HUMAN]** Add the required values (client ID, tenant ID, subscription ID) as GitHub repo secrets.

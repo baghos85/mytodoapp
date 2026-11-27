@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Application: use cases (commands/queries + handlers), DTOs and the interfaces it needs.
+       References Domain and the base EF Core package only (no provider, no ASP.NET), see SPEC 10.3 / ADR-021. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\MyTodoApp.Domain\MyTodoApp.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MyTodoApp.Application.UnitTests" />
+  </ItemGroup>
+
+</Project>

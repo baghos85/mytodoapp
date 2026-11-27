@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Shared build settings for every .NET project (SPEC 10.3).
+    This file lives in src/backend (not the repo root) because the API image is built with
+    src/backend as the Docker build context; the root Directory.Build.props imports it, so
+    tests/ projects get the same settings.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- IANA time zones need ICU (SPEC 10.3 "User time zone"). -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

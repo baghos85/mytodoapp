@@ -1,13 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <!-- Hello-world placeholder (issue #5). The backend scaffold issue replaces it. -->
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <InvariantGlobalization>false</InvariantGlobalization>
-    <RootNamespace>MyTodoApp.Api</RootNamespace>
-  </PropertyGroup>
+  <!-- Api: Minimal API endpoints, request contracts, DI composition (the only composition root), ProblemDetails, OpenAPI. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\MyTodoApp.Application\MyTodoApp.Application.csproj" />
+    <ProjectReference Include="..\MyTodoApp.Infrastructure\MyTodoApp.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+  </ItemGroup>
 
 </Project>

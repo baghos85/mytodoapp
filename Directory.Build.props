@@ -1,0 +1,10 @@
+<Project>
+
+  <!--
+    The shared settings (nullable, implicit usings, TreatWarningsAsErrors, InvariantGlobalization=false)
+    live in src/backend/Directory.Build.props, so the API Docker build (context src/backend) sees them too.
+    Projects under tests/ pick them up through this import.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)src/backend/Directory.Build.props" />
+
+</Project>

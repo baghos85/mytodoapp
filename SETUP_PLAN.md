@@ -36,7 +36,7 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
 
 ## Phase 2: Agent Configuration
 
-- [ ] 2.1 Create a root `CLAUDE.md` with project rules: stack, coding standards, branch naming (`feat/<issue>-<slug>`), every change goes through a PR, tests must pass, never deploy manually. Include my .NET preferences (architecture style, minimal APIs vs controllers, naming, validation/error handling). Add rule: when I correct you or something fails, add a one-line entry to docs/LEARNINGS.md (what went wrong → what fixed it).
+- [x] 2.1 Create a root `CLAUDE.md` with project rules: stack, coding standards, branch naming (`feat/<issue>-<slug>`), every change goes through a PR, tests must pass, never deploy manually. Include my .NET preferences (architecture style, minimal APIs vs controllers, naming, validation/error handling). Add rule: when I correct you or something fails, add a one-line entry to docs/LEARNINGS.md (what went wrong → what fixed it).
 - [ ] 2.2 Create `.claude/settings.json` with permissions: allow build/test/git/gh commands; deny destructive commands (`az group delete`, `rm -rf`, force push to main).
 - [ ] 2.3 Create subagents in `.claude/agents/`:
   - `architect.md`: writes spec + architecture, creates GitHub issues

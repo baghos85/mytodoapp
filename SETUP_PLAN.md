@@ -46,7 +46,7 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
   - `devops.md`: infra-as-code, Dockerfile, CI/CD pipelines
 - [x] 2.4 Add MCP servers to `.mcp.json`: GitHub MCP, Azure MCP (optionally Playwright for E2E tests).
 - [x] 2.5 Add hooks to run lint/format after file edits.
-- [ ] 2.6 **[HUMAN]** Restart `claude` so the new agents, settings and MCP servers load. Verify with `/agents` and `/mcp`.
+- [x] 2.6 **[HUMAN]** Restart `claude` so the new agents, settings and MCP servers load. Verify with `/agents` and `/mcp`.
 
 ## Phase 3: GitHub Guardrails
 

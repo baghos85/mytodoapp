@@ -26,6 +26,8 @@ public static class TestEndpoints
 
     public sealed record SampleDto(SamplePriority Priority, string DisplayName);
 
+    public sealed record SampleBody(string Title, DateOnly? DueDate, SamplePriority Priority);
+
     private static void Map(IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup(Prefix);
@@ -36,6 +38,7 @@ public static class TestEndpoints
         group.MapGet("/validation", () => Throw(new DomainValidationException("TimeZone", "The time zone is missing or unknown.")));
         group.MapGet("/unexpected", () => Throw(new InvalidOperationException(SecretMessage)));
         group.MapGet("/json", () => TypedResults.Ok(new SampleDto(SamplePriority.VeryHigh, "Sample")));
+        group.MapPost("/body", (SampleBody body) => TypedResults.Ok(body));
     }
 
     private static IResult Throw(Exception exception) => throw exception;

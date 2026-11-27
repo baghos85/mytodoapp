@@ -23,6 +23,11 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ExceptionHandler>();
 
+// Request binding errors (malformed JSON, wrong types, missing body, non-JSON content type) throw
+// BadHttpRequestException in every environment, so ExceptionHandler answers 400/415 as ProblemDetails
+// (the framework default throws only in Development and returns an empty body elsewhere).
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+
 // Built-in Minimal API validation: DataAnnotations / IValidatableObject on request records.
 builder.Services.AddValidation();
 
@@ -32,7 +37,10 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
+// The auth issue (#8) adds app.UseForwardedHeaders() here, FIRST in the pipeline and before
+// UseExceptionHandler() (SPEC 10.2), so every later middleware sees the client IP and scheme.
 app.UseExceptionHandler();
+app.UseProblemDetailsStatusCodePages();
 
 if (app.Environment.IsDevelopment())
 {

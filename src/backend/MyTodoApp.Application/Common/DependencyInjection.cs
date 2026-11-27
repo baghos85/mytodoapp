@@ -5,7 +5,8 @@ namespace MyTodoApp.Application.Common;
 
 public static class DependencyInjection
 {
-    private static readonly Type[] HandlerInterfaces = [typeof(ICommandHandler<,>), typeof(IQueryHandler<,>)];
+    private static readonly Type[] HandlerInterfaces =
+        [typeof(ICommandHandler<>), typeof(ICommandHandler<,>), typeof(IQueryHandler<,>)];
 
     /// <summary>
     /// Registers the Application layer: every handler in this assembly (scoped, under its handler interface).
@@ -18,7 +19,8 @@ public static class DependencyInjection
 
     /// <summary>
     /// Registers every non-abstract, non-generic class in <paramref name="assembly"/> that implements a closed
-    /// <see cref="ICommandHandler{TCommand,TResult}"/> or <see cref="IQueryHandler{TQuery,TResult}"/>, scoped,
+    /// <see cref="ICommandHandler{TCommand}"/>, <see cref="ICommandHandler{TCommand,TResult}"/> or
+    /// <see cref="IQueryHandler{TQuery,TResult}"/>, scoped,
     /// once per implemented handler interface. Plain reflection, no Scrutor.
     /// </summary>
     internal static IServiceCollection AddHandlersFromAssembly(this IServiceCollection services, Assembly assembly)

@@ -7,7 +7,8 @@ namespace MyTodoApp.Application.UnitTests.Common;
 
 public sealed class DependencyInjectionTests
 {
-    private static readonly Type[] HandlerInterfaces = [typeof(ICommandHandler<,>), typeof(IQueryHandler<,>)];
+    private static readonly Type[] HandlerInterfaces =
+        [typeof(ICommandHandler<>), typeof(ICommandHandler<,>), typeof(IQueryHandler<,>)];
 
     [Fact]
     public void AddHandlersFromAssembly_CommandAndQueryHandlers_RegistersEachScopedUnderItsInterface()
@@ -17,6 +18,7 @@ public sealed class DependencyInjectionTests
         services.AddHandlersFromAssembly(typeof(DependencyInjectionTests).Assembly);
 
         AssertRegistered<ICommandHandler<SampleCommand, int>, SampleCommandHandler>(services);
+        AssertRegistered<ICommandHandler<NoResultCommand>, NoResultCommandHandler>(services);
         AssertRegistered<IQueryHandler<SampleQuery, string>, SampleQueryHandler>(services);
     }
 
@@ -109,6 +111,13 @@ public sealed class DependencyInjectionTests
     internal sealed record OtherCommand;
 
     internal sealed record OtherQuery;
+
+    internal sealed record NoResultCommand;
+
+    internal sealed class NoResultCommandHandler : ICommandHandler<NoResultCommand>
+    {
+        public Task HandleAsync(NoResultCommand command, CancellationToken ct) => Task.CompletedTask;
+    }
 
     internal sealed class SampleCommandHandler : ICommandHandler<SampleCommand, int>
     {

@@ -113,7 +113,11 @@ public sealed class ExceptionHandlerTests(ApiFactory factory) : IClassFixture<Ap
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(ProblemJson, response.Content.Headers.ContentType?.MediaType);
         using var problem = await ReadJsonAsync(response);
-        Assert.Equal("Thing not found.", problem.RootElement.GetProperty("detail").GetString());
+        var root = problem.RootElement;
+        Assert.Equal("Thing not found.", root.GetProperty("detail").GetString());
+        Assert.Equal("Not Found", root.GetProperty("title").GetString());
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.5", root.GetProperty("type").GetString());
+        Assert.False(string.IsNullOrEmpty(root.GetProperty("traceId").GetString()));
     }
 
     /// <summary>

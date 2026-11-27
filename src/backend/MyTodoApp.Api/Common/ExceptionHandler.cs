@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -8,15 +7,15 @@ namespace MyTodoApp.Api.Common;
 
 /// <summary>
 /// The single global exception handler (SPEC 4.1, 10.3). Maps domain exceptions to ProblemDetails
-/// (404 / 409 / 403 / 400 with <c>errors[field]</c>); anything else becomes a generic 500 that never contains
-/// the exception message or stack trace, and is logged at Error with the trace id returned to the client.
+/// (404 / 409 / 403 / 400 with <c>errors[field]</c>) and request binding errors (<see cref="BadHttpRequestException"/>)
+/// to their own status (400) without the framework's message. Anything else becomes a generic 500 that never
+/// contains the exception message or stack trace, and is logged at Error with the trace id returned to the client.
 /// </summary>
 public sealed partial class ExceptionHandler(
     IProblemDetailsService problemDetailsService,
     ILogger<ExceptionHandler> logger) : IExceptionHandler
 {
     public const string UnexpectedErrorTitle = "An unexpected error occurred.";
-    private const string ProblemJsonContentType = "application/problem+json";
 
     public async ValueTask<bool> TryHandleAsync(
         HttpContext httpContext,
@@ -30,42 +29,34 @@ public sealed partial class ExceptionHandler(
             {
                 Status = StatusCodes.Status400BadRequest,
             },
-            NotFoundException e => new ProblemDetails { Status = StatusCodes.Status404NotFound, Detail = e.Message },
-            ConflictException e => new ProblemDetails { Status = StatusCodes.Status409Conflict, Detail = e.Message },
-            ForbiddenException e => new ProblemDetails { Status = StatusCodes.Status403Forbidden, Detail = e.Message },
+            NotFoundException e => Create(StatusCodes.Status404NotFound, e.Message),
+            ConflictException e => Create(StatusCodes.Status409Conflict, e.Message),
+            ForbiddenException e => Create(StatusCodes.Status403Forbidden, e.Message),
+            // Malformed JSON, wrong JSON types, missing body (thrown because ThrowOnBadRequest is on, see Program.cs).
+            // The framework message names parameters and types, so it is not returned. Client error: no Error log.
+            BadHttpRequestException e => Create(e.StatusCode, detail: null),
             _ => CreateUnexpectedErrorProblem(httpContext, exception),
         };
 
-        httpContext.Response.StatusCode = problem.Status!.Value;
-
-        var written = await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
-        {
-            HttpContext = httpContext,
-            ProblemDetails = problem,
-        });
-
-        if (!written)
-        {
-            // No IProblemDetailsWriter accepted the request's Accept header: still answer with problem+json.
-            await httpContext.Response.WriteAsJsonAsync(
-                problem, problem.GetType(), options: null, ProblemJsonContentType, cancellationToken);
-        }
-
+        await ProblemDetailsWriter.WriteAsync(httpContext, problemDetailsService, problem, cancellationToken);
         return true;
     }
 
+    private static ProblemDetails Create(int status, string? detail) => new() { Status = status, Detail = detail };
+
     private ProblemDetails CreateUnexpectedErrorProblem(HttpContext httpContext, Exception exception)
     {
-        var traceId = Activity.Current?.Id ?? httpContext.TraceIdentifier;
-        LogUnexpectedException(exception, httpContext.Request.Method, httpContext.Request.Path, traceId);
+        LogUnexpectedException(
+            exception,
+            httpContext.Request.Method,
+            httpContext.Request.Path,
+            ProblemDetailsWriter.GetTraceId(httpContext));
 
-        var problem = new ProblemDetails
+        return new ProblemDetails
         {
             Status = StatusCodes.Status500InternalServerError,
             Title = UnexpectedErrorTitle,
         };
-        problem.Extensions["traceId"] = traceId;
-        return problem;
     }
 
     [LoggerMessage(

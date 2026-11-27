@@ -582,7 +582,7 @@ All resources live in **`rg-mytodoapp`** (France Central). `<sfx>` = `take(uniqu
 | API app | `ca-mytodoapp-api` | **Internal ingress only**, single revision mode |
 | Migration job | `caj-mytodoapp-migrate` | Trigger `Manual`, replica timeout 600 s, retry limit 1 |
 | SQL logical server | `sql-mytodoapp-<sfx>` | **Entra-only auth**, min TLS 1.2, public network access with the "Allow Azure services" rule only (ADR-019) |
-| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, max 1 vCore, min 0.5, auto-pause 60 min, max size 2 GB, PITR **7 days**, backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice). **Azure SQL Database free offer** (`useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`, never `BillOverUsage`), see below |
+| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, max 2 vCores; max size, min vCores and auto-pause delay are the free-offer defaults (32 GB; auto-pause fixed at 15 min); PITR **7 days** (fixed by the free offer), backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice). **Azure SQL Database free offer** (`useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`, never `BillOverUsage`), see below |
 | Managed identities (user-assigned) | `id-mytodoapp-web`, `id-mytodoapp-api`, `id-mytodoapp-migrate` | Each: AcrPull on the registry. SQL rights: see 10.6 |
 
 Images in ACR: `mytodoapp-web`, `mytodoapp-api`, `mytodoapp-migrate`, tagged with the full commit SHA (never `latest`).

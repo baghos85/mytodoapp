@@ -69,8 +69,9 @@ tests/MyTodoApp.Application.UnitTests/Tasks/
 Cross-cutting code goes in a `Common/` folder in each project (e.g. `Application/Common/ICommandHandler.cs`, `Api/Common/ExceptionHandler.cs`).
 
 ### Light CQRS (no MediatR)
-- Two interfaces of our own, in `Application/Common/`:
-  `ICommandHandler<TCommand, TResult>` and `IQueryHandler<TQuery, TResult>`, each with `Task<TResult> HandleAsync(T request, CancellationToken ct)`.
+- Our own interfaces, in `Application/Common/`:
+  `ICommandHandler<TCommand, TResult>` and `IQueryHandler<TQuery, TResult>`, each with `Task<TResult> HandleAsync(T request, CancellationToken ct)`;
+  plus `ICommandHandler<TCommand>` with `Task HandleAsync(TCommand command, CancellationToken ct)` for commands without a result (no `Unit` type).
 - One handler per use case. Handlers are registered in DI; endpoints inject the handler and call it directly. No mediator or pipeline behaviors.
 - Commands change state; queries never do. Queries use `AsNoTracking()` and project straight to DTOs.
 - One database, one `DbContext`. No separate read models.

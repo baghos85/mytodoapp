@@ -1,6 +1,6 @@
 # MyTodoApp: Specification
 
-> **Status:** v1, written by the architect agent (setup step 4.1); owner answers to the open questions applied 2026-11-27. Architecture (section 10) added in step 4.2. Awaiting final owner approval (step 4.3).
+> **Status:** v1, written by the architect agent (setup step 4.1); owner answers to the open questions applied 2026-11-27. Architecture (section 10) added in step 4.2. **Approved by the owner (step 4.3, 2026-11-27)**; second-round answers applied (section 9).
 > This file is the single source of truth for *what* we build. Frontend and backend agents build against the API contract below, so keep it precise.
 
 ## 1. Overview
@@ -204,7 +204,7 @@ The other endpoints that `MapIdentityApi` maps (`/refresh`, `/confirmEmail`, `/r
 |---|---|
 | Request | `{ "email": string, "password": string }` (`twoFactorCode`/`twoFactorRecoveryCode` are not used in v1) |
 | Success | `200 OK`, empty body, `Set-Cookie` with the auth cookie (see 7.1). The client always sends `useCookies=true` and never `useSessionCookies`. |
-| Errors | `401` ProblemDetails with `detail` `"Failed"` (wrong email/password) or `"LockedOut"`. `429`. The UI shows a generic "Invalid email or password." for `Failed`. |
+| Errors | `400` ProblemDetails with `detail: "Only cookie login is supported."` when `useCookies=true` is absent or not `true` (rejected by the auth endpoint filter before Identity runs; bearer login is not supported in v1). `401` ProblemDetails with `detail` `"Failed"` (wrong email/password) or `"LockedOut"`. `429`. The UI shows a generic "Invalid email or password." for `Failed`. |
 
 **3. POST `/api/v1/auth/logout`** (anonymous, so it is idempotent)
 | | |
@@ -405,7 +405,7 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 - **Why:** only to provide the app (your account and your tasks). No sharing, selling, advertising or analytics.
 - **Where:** Microsoft Azure, EU region **France Central**.
 - **Retention:** until you delete your account. After deletion, database backups keep the data for up to **7 days**, then it is gone.
-- **Logs:** application logs contain technical data (ids, errors, request metadata) and **no email addresses or task/list content**.
+- **Logs:** application logs contain technical data (ids, errors, request metadata) and **no email addresses or task/list content**. Logs are kept for **30 days**.
 - **How to delete your account:** Account page → "Delete my account" → confirm with your password. Deletion is immediate and permanent.
 - Data export is not available yet.
 
@@ -500,7 +500,7 @@ Latest two major versions of Chrome, Edge, Firefox and Safari (macOS and iOS/iPa
 - Data minimisation: only email, password hash (plus Identity's security fields) and the user's own lists and tasks. No analytics, tracking or third-party scripts.
 - Right to erasure: self-service account deletion (A6, endpoint 21), effective immediately in the live database. Azure SQL backups (point-in-time restore) keep deleted data for **up to 7 days**. The infra must set backup retention to 7 days to match the privacy notice.
 - Right to be informed: the public `/privacy` page (6.3).
-- Logs contain no email addresses or task/list content (7.7).
+- Logs contain no email addresses or task/list content (7.7) and are kept for 30 days (Log Analytics retention, 10.11), as stated in the privacy notice.
 
 ## 8. Out of scope (v1)
 - Search; dark mode / themes; localisation (English only).
@@ -519,12 +519,12 @@ Latest two major versions of Chrome, Edge, Firefox and Safari (macOS and iOS/iPa
 
 The owner answered the first round on 2026-11-27 (same origin: yes; open registration: yes; account deletion + privacy page: in v1, data export out; limits: kept; Upcoming: no horizon).
 
-**Raised in step 4.2 (owner to answer in 4.3)**
-1. **Proposed ADRs 017–025** (section 10): accept, or pick the listed alternative.
-2. **Login without `useCookies=true`:** the bearer scheme is not registered in v1, so `MapIdentityApi`'s login would fail with a 500. Proposal: the auth endpoint filter rejects it with `400` ProblemDetails, `detail: "Only cookie login is supported."` (small addition to endpoint 2).
-3. **Log retention in the privacy notice:** Log Analytics keeps logs **30 days** (10.11). Proposal: add "Logs are kept for 30 days." to the Privacy page's "Logs" bullet.
-4. **Azure SQL free offer:** the serverless database could use the Azure SQL Database free offer (monthly free vCore-seconds, auto-pause when exhausted), one per subscription. Use it if the subscription doesn't already have one? Default in 10.1 is the regular serverless tier.
-5. **One-time Entra steps for the owner** (ADR-019): create the group `sg-mytodoapp-sql-admins`, add yourself, store its object id as the GitHub repo variable `SQL_ADMIN_GROUP_OBJECT_ID`, and after the first deployment add `id-mytodoapp-migrate` to the group. OK?
+**Raised in step 4.2, answered by the owner in step 4.3 (2026-11-27)**
+1. **ADR-017 to ADR-025:** accepted as written (now **Accepted** in `docs/DECISIONS.md`).
+2. **Login without `useCookies=true`:** returns **`400`** ProblemDetails `detail: "Only cookie login is supported."` (not a 500), via the auth endpoint filter. Applied to endpoint 2 (4.4) and 10.2.
+3. **Log retention in the privacy notice:** the Privacy page states that application logs are kept **30 days** (6.3, 7.8).
+4. **Azure SQL free offer:** use it. When the monthly free limit is used up, the database **auto-pauses until the next month**; never bill over the limit. Applied to ADR-017 and 10.1 (including the consequence: the app is unavailable until the month resets while `/health` stays green).
+5. **One-time Entra steps** (ADR-019): agreed. They stay an **owner action in Phase 5**, before the first deployment (10.6).
 
 **Decisions recorded as ADRs in 4.2** (ADR-009 to ADR-016)
 - Same-origin deployment: nginx in the frontend container reverse-proxies `/api` to an API with internal-only ingress; no CORS; Vite dev-server proxy locally.
@@ -540,9 +540,11 @@ The owner answered the first round on 2026-11-27 (same origin: yes; open registr
 - Read-only offline via Workbox NetworkFirst runtime cache of `GET /api/v1/*`; caches cleared on sign-out, account deletion and `401`.
 - `/health` probes don't touch the database (keeps Azure SQL serverless able to auto-pause).
 
+**Open questions: none.**
+
 ## 10. Architecture
 
-How the system is built and deployed. Decisions behind it: ADR-009 to ADR-025 in `docs/DECISIONS.md` (ADR-017 to ADR-025 are **Proposed** until the owner accepts them in step 4.3).
+How the system is built and deployed. Decisions behind it: ADR-009 to ADR-025 in `docs/DECISIONS.md` (all **Accepted**; ADR-017 to ADR-025 accepted by the owner in step 4.3).
 
 ### 10.1 Runtime overview
 
@@ -580,10 +582,17 @@ All resources live in **`rg-mytodoapp`** (France Central). `<sfx>` = `take(uniqu
 | API app | `ca-mytodoapp-api` | **Internal ingress only**, single revision mode |
 | Migration job | `caj-mytodoapp-migrate` | Trigger `Manual`, replica timeout 600 s, retry limit 1 |
 | SQL logical server | `sql-mytodoapp-<sfx>` | **Entra-only auth**, min TLS 1.2, public network access with the "Allow Azure services" rule only (ADR-019) |
-| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, max 1 vCore, min 0.5, auto-pause 60 min, max size 2 GB, PITR **7 days**, backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice) |
+| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, max 1 vCore, min 0.5, auto-pause 60 min, max size 2 GB, PITR **7 days**, backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice). **Azure SQL Database free offer** (`useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`, never `BillOverUsage`), see below |
 | Managed identities (user-assigned) | `id-mytodoapp-web`, `id-mytodoapp-api`, `id-mytodoapp-migrate` | Each: AcrPull on the registry. SQL rights: see 10.6 |
 
 Images in ACR: `mytodoapp-web`, `mytodoapp-api`, `mytodoapp-migrate`, tagged with the full commit SHA (never `latest`).
+
+**Azure SQL free offer (owner decision, ADR-017):** the database uses the free offer (a monthly allowance of free vCore-seconds and storage; the number of free databases per subscription is limited). When the monthly allowance is used up, the database **auto-pauses until the start of the next month** (UTC); usage over the limit is **never billed**. Consequences:
+- Until the month resets, every API call that needs the database fails (generic `500`/connection errors), so the app is effectively **unavailable**; sign-in and all list/task pages fail.
+- `/health` (API) and `/healthz` (nginx) **stay green**, because they don't touch the database (4.8, ADR-016). Probes, the deploy smoke test (`/api/v1/auth/me` → `401` needs no DB) and Container Apps do not detect it; it shows up only as API errors in `log-mytodoapp`.
+- Migration job runs also fail while the database is paused for the month, so deployments with a migration step fail until the reset.
+- Each wake-up from auto-pause consumes allowance for at least the 60-minute auto-pause delay (at min 0.5 vCore), so frequent short visits use the allowance faster than steady use.
+- If the subscription can't get the free offer, the devops agent stops and asks the owner (no silent fallback to a billed tier).
 
 ### 10.2 Request and auth flow
 1. Browser loads the SPA from `ca-mytodoapp-web`. SPA calls `GET /api/v1/auth/me` (relative URL, same origin).
@@ -613,7 +622,7 @@ location /api/ {
 - TLS ends at the Container Apps ingress. The API doesn't call `UseHttpsRedirection`/`UseHsts` (nginx sends HSTS). The cookie uses `CookieSecurePolicy.Always`.
 - Unauthenticated → `401`, forbidden → `403`: set `Events.OnRedirectToLogin`/`OnRedirectToAccessDenied` to write the status code (don't rely only on .NET 10's API-endpoint detection).
 - Identity registration: `AddIdentityCore<User>().AddEntityFrameworkStores<AppDbContext>().AddSignInManager().AddApiEndpoints()` + `AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies()`. **Not** `AddIdentityApiEndpoints` (it also registers the bearer scheme).
-- `/api/v1/auth` group: an endpoint filter allows only `register`, `login`, `logout`, `me` (GET/DELETE); everything else from `MapIdentityApi` returns `404` (4.4). Login without `useCookies=true`: see open question 2 in section 9.
+- `/api/v1/auth` group: an endpoint filter allows only `register`, `login`, `logout`, `me` (GET/DELETE); everything else from `MapIdentityApi` returns `404` (4.4). The same filter rejects login without `useCookies=true` with `400` ProblemDetails `detail: "Only cookie login is supported."` (endpoint 2), so the unregistered bearer scheme is never reached.
 - Rate limiter: built-in `AddRateLimiter`, policy `"auth"` (fixed window, partition = `RemoteIpAddress`), `PermitLimit`/`Window` from config `RateLimiting:Auth` (defaults 10 / 1 min) so tests can raise them. `OnRejected` sets `Retry-After` and writes ProblemDetails `429`.
 
 ### 10.3 Backend solution structure
@@ -689,7 +698,7 @@ Indexes and delete behaviour:
 
 **Account deletion** (`IdentityService.DeleteUserAndDataAsync`): inside the execution strategy, one transaction: `Tasks.Where(UserId).ExecuteDeleteAsync()`, `TaskLists.Where(UserId).ExecuteDeleteAsync()`, `UserManager.DeleteAsync(user)`, commit.
 
-### 10.5 Database migrations (ADR-018, Proposed)
+### 10.5 Database migrations (ADR-018)
 | Option | Problem |
 |---|---|
 | (a) API migrates at start-up | API identity would need DDL rights (not least privilege); start-up blocked by SQL resume; several replicas start at once; failed migration = unhealthy app. |
@@ -705,7 +714,7 @@ Indexes and delete behaviour:
 - Cold start: the bundle's connection uses `Connect Timeout=60` and EF retry; the job retry limit is 1.
 - Locally: compose service `migrate` (same image, SQL auth) or `dotnet ef database update`. Integration tests apply migrations with `Database.MigrateAsync()`.
 
-### 10.6 Azure SQL authentication (ADR-019, Proposed)
+### 10.6 Azure SQL authentication (ADR-019)
 - **Entra-only authentication** (`azureADOnlyAuthentication: true`); no SQL logins or passwords anywhere in Azure.
 - **Entra admin:** security group **`sg-mytodoapp-sql-admins`** (`principalType: Group`); members: the owner and `id-mytodoapp-migrate`. Group object id: Bicep param `sqlAdminGroupObjectId` from GitHub repo variable `SQL_ADMIN_GROUP_OBJECT_ID` (an identifier, not a secret).
 - **Database users** (least privilege):
@@ -715,7 +724,7 @@ Indexes and delete behaviour:
   | `id-mytodoapp-migrate` | server Entra admin (via group) | owner adds it to the group once |
   | `id-mytodoapp-web` | none | |
 - `WITH OBJECT_ID = '<principalId>'` avoids giving the SQL server Microsoft Graph "Directory Readers" permissions.
-- **One-time owner steps** (Entra directory objects, not Azure resources): create the group, add yourself, set `SQL_ADMIN_GROUP_OBJECT_ID`; after the first deployment creates `id-mytodoapp-migrate`, add it to the group and re-run the failed migration step. Before that, the first deployment's migration step fails (expected once).
+- **One-time owner steps** (Entra directory objects, not Azure resources; agreed by the owner in step 4.3, done as an owner action in Phase 5 before the first deployment): create the group, add yourself, set `SQL_ADMIN_GROUP_OBJECT_ID`; after the first deployment creates `id-mytodoapp-migrate`, add it to the group and re-run the failed migration step. Before that, the first deployment's migration step fails (expected once).
 - API connection string (no secret): `Server=tcp:sql-mytodoapp-<sfx>.database.windows.net,1433;Database=sqldb-mytodoapp;Authentication=Active Directory Managed Identity;User Id=<id-mytodoapp-api clientId>;Encrypt=True;Connect Timeout=60`.
 - Network: public endpoint with only the "Allow Azure services" firewall rule (Consumption Container Apps have no fixed outbound IP). No client-IP rules in Bicep (public repo). Private endpoint + VNet is a later option (cost).
 
@@ -808,7 +817,7 @@ Migration image: see 10.5 (0.5 vCPU / 1 GiB).
 
 **Cold start:** after idle, the first request may wait for the web replica, the API replica and SQL resume (up to ~1 min). Accepted (ADR-001, 7.4); nginx and the client timeouts are sized for it.
 
-### 10.10 CI/CD (ADR-023, Proposed)
+### 10.10 CI/CD (ADR-023)
 **`ci.yml`** (pull requests to `main`; always runs, so required checks never stay "pending"):
 | Job | Runs when | Steps |
 |---|---|---|
@@ -840,7 +849,7 @@ Migration image: see 10.5 (0.5 vCPU / 1 GiB).
 - Health: `/health` (API, no DB check) and `/healthz` (nginx) for probes only.
 - Later (needs an ADR + package approval): Application Insights via Azure Monitor OpenTelemetry, alerts.
 
-### 10.12 Testing strategy (ADR-022, Proposed)
+### 10.12 Testing strategy (ADR-022)
 | Level | Project / tool | What | Notes |
 |---|---|---|---|
 | Domain unit | `MyTodoApp.Domain.UnitTests` (xUnit v3) | entity rules: Inbox guards, complete/uncomplete, trimming, ranges | pure, no I/O |

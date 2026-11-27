@@ -20,6 +20,9 @@
     "allow": [
       "mcp__azure", "mcp__playwright",
 
+      "Edit(**/src/**)", "Edit(**/tests/**)", "Edit(**/infra/**)", "Edit(**/docs/**)",
+      "Edit(**/.github/workflows/**)", "Edit(**/compose.yaml)",
+
       "Bash(dotnet build *)", "Bash(dotnet test *)", "Bash(dotnet format *)", "Bash(dotnet restore *)",
       "Bash(dotnet run *)", "Bash(dotnet ef *)", "Bash(dotnet new *)", "Bash(dotnet add *)",
       "Bash(dotnet sln *)", "Bash(dotnet user-secrets *)", "Bash(dotnet --*)", "Bash(dotnet list *)",

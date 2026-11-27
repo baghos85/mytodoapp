@@ -110,7 +110,7 @@ Suggested indexes: `TodoTask (UserId, IsCompleted, DueDate)`, `TodoTask (ListId,
 - Deleting a list deletes all its tasks (database cascade). The Inbox cannot be deleted, so the user always has at least one list.
 - Limits (to keep v1 free of pagination): **max 100 lists per user**. Task count is not capped, but collection endpoints return at most **500 tasks** (see 4.1).
 - No soft delete, no audit history, no optimistic concurrency in v1 (last write wins).
-- **Account deletion** (endpoint 21) removes the user's tasks, then lists, then the Identity user, in **one transaction**. Tasks are deleted explicitly because `TodoTask.UserId` has no cascade. Nothing is kept in the live database; backups keep it for up to 7 days (section 7.8).
+- **Account deletion** (endpoint 21) removes the user's tasks, then lists, then the Identity user, in **one transaction**. Tasks are deleted explicitly because `TodoTask.UserId` has no cascade. Nothing is kept in the live database; backups are deleted automatically within about 14 days (section 7.8).
 
 ## 4. API contract
 
@@ -404,7 +404,7 @@ Where validation lives: format/length rules are DataAnnotations (plus `IValidata
 - **What is stored:** email address, password hash (never the password itself), and the lists and tasks you create (names, titles, notes, due dates, priorities, completion state, timestamps). A sign-in cookie is used only to keep you signed in (strictly necessary, no tracking or analytics cookies).
 - **Why:** only to provide the app (your account and your tasks). No sharing, selling, advertising or analytics.
 - **Where:** Microsoft Azure, EU region **France Central**.
-- **Retention:** until you delete your account. After deletion, database backups keep the data for up to **7 days**, then it is gone.
+- **Retention:** until you delete your account. After deletion, the data is removed from the live database immediately, and backups are deleted automatically within about **14 days**.
 - **Logs:** application logs contain technical data (ids, errors, request metadata) and **no email addresses or task/list content**. Logs are kept for **30 days**.
 - **How to delete your account:** Account page → "Delete my account" → confirm with your password. Deletion is immediate and permanent.
 - Data export is not available yet.
@@ -498,7 +498,7 @@ Latest two major versions of Chrome, Edge, Firefox and Safari (macOS and iOS/iPa
 ### 7.8 Privacy (GDPR)
 - Data is stored only in Azure, EU region France Central (Azure SQL, Log Analytics).
 - Data minimisation: only email, password hash (plus Identity's security fields) and the user's own lists and tasks. No analytics, tracking or third-party scripts.
-- Right to erasure: self-service account deletion (A6, endpoint 21), effective immediately in the live database. Azure SQL backups (point-in-time restore) keep deleted data for **up to 7 days**. The infra must set backup retention to 7 days to match the privacy notice.
+- Right to erasure: self-service account deletion (A6, endpoint 21), effective immediately in the live database. Backups are deleted automatically within **about 14 days**: point-in-time restore (PITR) retention is **7 days**, and Azure keeps the backup files needed for that window for up to a week longer (Azure SQL automated backups, "Backup storage consumption"). The technical setting stays **7-day PITR** (fixed by the free offer, 10.1); the privacy notice (6.3) states "within about 14 days". If PITR retention ever changes, update the privacy notice in the same PR (ADR-014).
 - Right to be informed: the public `/privacy` page (6.3).
 - Logs contain no email addresses or task/list content (7.7) and are kept for 30 days (Log Analytics retention, 10.11), as stated in the privacy notice.
 
@@ -531,7 +531,7 @@ The owner answered the first round on 2026-11-27 (same origin: yes; open registr
 - Cookie-only auth in v1 (Identity application cookie, HttpOnly, Secure, `SameSite=Strict`, no antiforgery tokens); only register/login of `MapIdentityApi` exposed, plus custom logout, me and delete-me.
 - Auth-scheme agnostic API: `RequireAuthorization()`/`[Authorize]` only, user via `ICurrentUser` only, no direct cookie access, so bearer tokens (Identity bearer or JWT via OIDC) can be added later for a mobile client.
 - Open registration, protected by rate limiting (10/min/IP) and Identity lockout.
-- GDPR: self-service account deletion with password confirmation (hard delete in one transaction), public privacy notice, 7-day SQL backup retention; data export deferred.
+- GDPR: self-service account deletion with password confirmation (hard delete in one transaction), public privacy notice, 7-day SQL point-in-time restore (privacy notice: backups deleted within about 14 days, 7.8); data export deferred.
 - Every task belongs to a list; default Inbox created atomically at registration, cannot be renamed/deleted.
 - Due dates are `DateOnly`; "today" computed per request from the browser's IANA time zone (`timeZone` query parameter); Today includes overdue; Upcoming has no horizon.
 - Denormalised `UserId` on tasks (no cascade) for simple ownership filtering.
@@ -582,7 +582,7 @@ All resources live in **`rg-mytodoapp`** (France Central). `<sfx>` = `take(uniqu
 | API app | `ca-mytodoapp-api` | **Internal ingress only**, single revision mode |
 | Migration job | `caj-mytodoapp-migrate` | Trigger `Manual`, replica timeout 600 s, retry limit 1 |
 | SQL logical server | `sql-mytodoapp-<sfx>` | **Entra-only auth**, min TLS 1.2, public network access with the "Allow Azure services" rule only (ADR-019) |
-| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, max 2 vCores; max size, min vCores and auto-pause delay are the free-offer defaults (32 GB; auto-pause fixed at 15 min); PITR **7 days** (fixed by the free offer), backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice). **Azure SQL Database free offer** (`useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`, never `BillOverUsage`), see below |
+| SQL database | `sqldb-mytodoapp` | Serverless `GP_S_Gen5`, capacity (max vCores) 2, as in Microsoft's free-offer template; max size, min capacity and auto-pause delay are **not set** in Bicep (setting them fails on the free offer): max size is the free-offer default of 32 GB and auto-pause is fixed by the free offer at 15 min; PITR **7 days** (fixed by the free offer), backup storage redundancy **Local** (keeps backups in France Central, matches the privacy notice). **Azure SQL Database free offer** (`useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`, never `BillOverUsage`), see below |
 | Managed identities (user-assigned) | `id-mytodoapp-web`, `id-mytodoapp-api`, `id-mytodoapp-migrate` | Each: AcrPull on the registry. SQL rights: see 10.6 |
 
 Images in ACR: `mytodoapp-web`, `mytodoapp-api`, `mytodoapp-migrate`, tagged with the full commit SHA (never `latest`).
@@ -591,7 +591,7 @@ Images in ACR: `mytodoapp-web`, `mytodoapp-api`, `mytodoapp-migrate`, tagged wit
 - Until the month resets, every API call that needs the database fails (generic `500`/connection errors), so the app is effectively **unavailable**; sign-in and all list/task pages fail.
 - `/health` (API) and `/healthz` (nginx) **stay green**, because they don't touch the database (4.8, ADR-016). Probes, the deploy smoke test (`/api/v1/auth/me` → `401` needs no DB) and Container Apps do not detect it; it shows up only as API errors in `log-mytodoapp`.
 - Migration job runs also fail while the database is paused for the month, so deployments with a migration step fail until the reset.
-- Each wake-up from auto-pause consumes allowance for at least the 60-minute auto-pause delay (at min 0.5 vCore), so frequent short visits use the allowance faster than steady use.
+- Each wake-up from auto-pause consumes allowance for at least the 15-minute auto-pause delay (fixed by the free offer, not configurable), so frequent short visits use the allowance faster than steady use.
 - If the subscription can't get the free offer, the devops agent stops and asks the owner (no silent fallback to a billed tier).
 
 ### 10.2 Request and auth flow
@@ -707,7 +707,9 @@ Indexes and delete behaviour:
 | **(d) Chosen: EF Core migration bundle in a Container Apps Job** | Runs inside Azure with its own identity; see below. |
 
 - Migrations live in `MyTodoApp.Infrastructure/Persistence/Migrations`, created with `dotnet ef migrations add <Name> --project src/backend/MyTodoApp.Infrastructure --startup-project src/backend/MyTodoApp.Api`. Each schema change PR includes its migration.
-- Image `mytodoapp-migrate` (`src/backend/Migrate.Dockerfile`): SDK stage runs `dotnet ef migrations bundle --self-contained -r linux-x64`; runtime stage `runtime-deps:10.0` + `go-sqlcmd`, non-root. Entrypoint: (1) `sqlcmd` runs `infra/sql/grant-api-user.sql` (idempotent: create `id-mytodoapp-api` DB user `FROM EXTERNAL PROVIDER WITH OBJECT_ID` = API identity principal id, add to `db_datareader` + `db_datawriter`), (2) `./efbundle --connection "$ConnectionStrings__AppDb"`.
+- Image `mytodoapp-migrate` (`src/backend/Migrate.Dockerfile`), **built from the repository root** (`docker build -f src/backend/Migrate.Dockerfile .`) because it needs `infra/sql/grant-api-user.sql` as well as `src/backend`; it has its own ignore file `src/backend/Migrate.Dockerfile.dockerignore` (per-Dockerfile ignore files need BuildKit, the default in compose and on GitHub runners). SDK stage runs `dotnet ef migrations bundle --self-contained -r linux-x64` (added by the data model issue); a throwaway stage downloads `go-sqlcmd` (pinned version, checksum-verified); runtime stage `runtime-deps:10.0` + `sqlcmd`, non-root. Entrypoint `src/backend/migrate-entrypoint.sh`:
+  1. If `API_CLIENT_ID` is set: `sqlcmd` (managed identity login with `SQL_CLIENT_ID`, against `SQL_SERVER` / `SQL_DATABASE`, retried for SQL resume) runs `infra/sql/grant-api-user.sql` with sqlcmd variables `ApiDbUser` (= `API_DB_USER`) and `ApiClientId` (= `API_CLIENT_ID`). The script is idempotent: it creates the `id-mytodoapp-api` DB user with `CREATE USER [...] WITH SID = <SID from the API identity's client id>, TYPE = E`, recreates it if an existing user has a different SID (identity recreated), and adds it to `db_datareader` + `db_datawriter`. If `API_CLIENT_ID` is empty (local compose, no Entra) this step is skipped.
+  2. If the image contains `/app/efbundle`: `efbundle --connection "$ConnectionStrings__AppDb"`; otherwise skipped (before the data model issue).
 - Job `caj-mytodoapp-migrate` runs as `id-mytodoapp-migrate`. EF Core's migration lock prevents concurrent runs.
 - `deploy.yml` starts the job **after** pushing images and **before** switching the API to the new image; a failed migration stops the deployment with the old version still serving.
 - **Migrations must be backward compatible** with the previous API version (expand/contract: add columns nullable or with defaults, drop in a later release), because the old revision serves while the job runs.
@@ -723,8 +725,9 @@ Indexes and delete behaviour:
   | `id-mytodoapp-api` | `db_datareader`, `db_datawriter` (no DDL) | migration job, `grant-api-user.sql`, every run (idempotent) |
   | `id-mytodoapp-migrate` | server Entra admin (via group) | owner adds it to the group once |
   | `id-mytodoapp-web` | none | |
-- `WITH OBJECT_ID = '<principalId>'` avoids giving the SQL server Microsoft Graph "Directory Readers" permissions.
-- **One-time owner steps** (Entra directory objects, not Azure resources; agreed by the owner in step 4.3, done as an owner action in Phase 5 before the first deployment): create the group, add yourself, set `SQL_ADMIN_GROUP_OBJECT_ID`; after the first deployment creates `id-mytodoapp-migrate`, add it to the group and re-run the failed migration step. Before that, the first deployment's migration step fails (expected once).
+- The API user is created with **`CREATE USER [id-mytodoapp-api] WITH SID = <sid>, TYPE = E`**, where `<sid>` is the API identity's **client id** (not its object/principal id) converted to `varbinary(16)`. This form does no Microsoft Entra lookup, so the SQL server's identity needs **no "Directory Readers"** role. (`FROM EXTERNAL PROVIDER`, also with `WITH OBJECT_ID`, validates the principal in Entra and needs Directory Readers when a service principal runs it; don't switch back to it.)
+- **One-time owner steps** (Entra directory objects, not Azure resources; agreed by the owner in step 4.3, done as an owner action in Phase 5 before the first deployment): create the group, add yourself, set `SQL_ADMIN_GROUP_OBJECT_ID`; after the first deployment creates `id-mytodoapp-migrate`, add it to the group and re-run the failed deployment. Before that, the first deployment's migration step fails (expected once).
+- **Group membership delay:** a managed identity's new group membership can take **several hours** to apply, because its tokens are cached (no forced refresh). A re-run right after adding `id-mytodoapp-migrate` to the group may still fail; wait and re-run later (the `deploy.yml` notice says so).
 - API connection string (no secret): `Server=tcp:sql-mytodoapp-<sfx>.database.windows.net,1433;Database=sqldb-mytodoapp;Authentication=Active Directory Managed Identity;User Id=<id-mytodoapp-api clientId>;Encrypt=True;Connect Timeout=60`.
 - Network: public endpoint with only the "Allow Azure services" firewall rule (Consumption Container Apps have no fixed outbound IP). No client-IP rules in Bicep (public repo). Private endpoint + VNet is a later option (cost).
 
@@ -740,7 +743,9 @@ No secrets in the repo or in Azure config: SQL uses managed identity; Data Prote
 | api | `Logging__Console__FormatterName` | `json` |
 | web | `API_UPSTREAM` | `https://` + API ingress FQDN (Bicep) |
 | migrate | `ConnectionStrings__AppDb` | as API, but migrate identity client id |
-| migrate | `API_DB_USER`, `API_PRINCIPAL_ID` | `id-mytodoapp-api`, its principal id (Bicep) |
+| migrate | `SQL_SERVER`, `SQL_DATABASE` | SQL server FQDN, `sqldb-mytodoapp` (Bicep), for `sqlcmd` |
+| migrate | `SQL_CLIENT_ID` | migrate identity client id (Bicep), `sqlcmd` managed identity login |
+| migrate | `API_DB_USER`, `API_CLIENT_ID` | `id-mytodoapp-api`, its **client id** (not principal id; used as the user's SID, 10.6) (Bicep) |
 
 - GitHub: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (ADR-005); variable `SQL_ADMIN_GROUP_OBJECT_ID`.
 - Bicep: `infra/core.bicep`, `infra/apps.bicep`, `infra/modules/*.bicep`, parameter files `*.bicepparam`; image tags are deployment parameters.
@@ -801,11 +806,11 @@ src/frontend/
 | Runtime | `mcr.microsoft.com/dotnet/aspnet:10.0` (regular, has ICU + tzdata) | `nginxinc/nginx-unprivileged:stable-alpine` |
 | User | non-root `USER $APP_UID` | non-root (uid 101) |
 | Port | 8080 (`ASPNETCORE_HTTP_PORTS=8080`) | 8080 |
-| Probes | liveness + readiness `GET /health`; startup probe `GET /health` (period 3 s, failure threshold 20) | liveness + readiness `GET /healthz` (`location = /healthz { access_log off; return 200; }`) |
+| Probes | liveness + readiness `GET /health`; startup probe `GET /health` (period 3 s, failure threshold 20). Probes send **`Host: <API internal FQDN>`** (`probeHost` in `container-app.bicep`), because `AllowedHosts` is the internal FQDN and host filtering answers `400` to any other `Host`. Keep `AllowedHosts` and the probe `Host` in sync | liveness + readiness `GET /healthz` (`location = /healthz { access_log off; return 200; }`), no `Host` header |
 | Resources | 0.25 vCPU / 0.5 GiB | 0.25 vCPU / 0.5 GiB |
 | Scale | min **0**, max 2, HTTP rule 50 concurrent requests | min **0**, max 2, HTTP rule 50 concurrent requests |
 
-Migration image: see 10.5 (0.5 vCPU / 1 GiB).
+Migration image: `src/backend/Migrate.Dockerfile`, build context = **repository root**, ignore file `src/backend/Migrate.Dockerfile.dockerignore`; details in 10.5 (0.5 vCPU / 1 GiB).
 
 **nginx (web) essentials:**
 - SPA fallback: `location / { try_files $uri $uri/ /index.html; }`; `/api/` proxy as in 10.2.

@@ -178,7 +178,9 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 
 **Decision:** Self-service account deletion confirmed with the current password: hard delete of tasks, lists and the user in one transaction, then sign-out. Public `/privacy` page. Azure SQL point-in-time backup retention **7 days**, stated in the privacy notice. Data stays in France Central. Logs contain no emails or task/list content. Data export is a future item.
 
-**Consequences:** Deleted data disappears from backups after 7 days. Infra must keep backup retention (and backup storage location) consistent with the privacy notice.
+- *Update (2026-11-27, owner decision on #18):* Azure keeps the backup files needed for point-in-time restore for up to a week longer than the retention period, so the privacy notice now says **"backups are deleted automatically within about 14 days"** (7-day PITR window plus up to a week of backup-file retention). The technical setting stays **7-day PITR**.
+
+**Consequences:** Deleted data disappears from backups within about 14 days. Infra must keep PITR retention (and backup storage location) consistent with the privacy notice; if PITR retention changes, the notice changes in the same PR.
 
 ---
 
@@ -246,10 +248,12 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 
 **Decision:**
 - `azureADOnlyAuthentication: true`. Entra admin = security group **`sg-mytodoapp-sql-admins`** (owner + `id-mytodoapp-migrate`); its object id comes from GitHub variable `SQL_ADMIN_GROUP_OBJECT_ID`.
-- `id-mytodoapp-api` gets `db_datareader` + `db_datawriter` only. The migration job creates/grants it on every run with an idempotent script (`CREATE USER ... FROM EXTERNAL PROVIDER WITH OBJECT_ID = ...`, so the server needs no Graph "Directory Readers" role).
+- `id-mytodoapp-api` gets `db_datareader` + `db_datawriter` only. The migration job creates/grants it on every run with an idempotent script (`infra/sql/grant-api-user.sql`): `CREATE USER [id-mytodoapp-api] WITH SID = <sid from the API identity's client id>, TYPE = E`. This does no Entra lookup, so the SQL server needs no "Directory Readers" role. The job gets `API_DB_USER`, `API_CLIENT_ID` (client id, not principal id), `SQL_SERVER`, `SQL_DATABASE` and `SQL_CLIENT_ID` (its own client id for the `sqlcmd` login).
+  - *Update (2026-11-27):* the original text said `FROM EXTERNAL PROVIDER WITH OBJECT_ID = <principal id>` avoids Directory Readers. That is wrong: `FROM EXTERNAL PROVIDER` (with or without `OBJECT_ID`) validates the principal in Entra and needs the server identity in Directory Readers when a service principal runs it. The SID form with the **client id** (as the CREATE USER docs require for managed identities) is what the code does; don't switch back.
 - Connection strings use `Authentication=Active Directory Managed Identity;User Id=<client id>` (no secret).
 - Network: public endpoint with only the "Allow Azure services" rule; no client-IP rules.
-- One-time owner steps (agreed by the owner in step 4.3; an owner action in Phase 5 before the first deployment): create the group, add yourself, set the variable; after the first deployment, add `id-mytodoapp-migrate` to the group and re-run the migration step.
+- One-time owner steps (agreed by the owner in step 4.3; an owner action in Phase 5 before the first deployment): create the group, add yourself, set the variable; after the first deployment, add `id-mytodoapp-migrate` to the group and re-run the deployment.
+  - *Note:* a managed identity's new group membership can take **several hours** to apply, because its tokens are cached (no forced refresh). A re-run right after adding it may still fail; wait and re-run later. If this becomes painful, alternative 2 below avoids it (needs a new ADR).
 
 **Alternatives:** (1) Owner as the only Entra admin and a one-time manual SQL script to create both identities' users: fewer automated admin rights, but a manual data-plane step that needs a client firewall rule. (2) `id-mytodoapp-migrate` as the direct Entra admin: zero manual steps, but the owner has no direct DB access without a Bicep change.
 

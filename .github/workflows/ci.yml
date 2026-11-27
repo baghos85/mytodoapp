@@ -1,0 +1,212 @@
+# CI for pull requests to main (SPEC 10.10, ADR-023). Never logs in to Azure.
+# The workflow always runs; the `changes` job decides which jobs do work, and `ci-ok` is the single
+# required status check (skipped jobs count as OK, failed or cancelled jobs fail it).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      infra: ${{ steps.filter.outputs.infra }}
+      images: ${{ steps.filter.outputs.images }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # the PR merge commit and its first parent (the base branch)
+          persist-credentials: false
+
+      - name: Detect changed areas
+        id: filter
+        run: |
+          set -euo pipefail
+          # HEAD is the PR merge commit; HEAD^1 is the base branch, so this is exactly the PR's diff.
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
+          echo "Changed files:"; cat "$RUNNER_TEMP/changed.txt"
+
+          matches() { grep -qE "$1" "$RUNNER_TEMP/changed.txt"; }
+          # A change to this workflow runs everything.
+          all='^\.github/workflows/ci\.yml$'
+          flag() { if matches "$1" || matches "$all"; then echo true; else echo false; fi; }
+
+          backend=$(flag '^(src/backend/|tests/MyTodoApp\.|global\.json$|MyTodoApp\.slnx$|Directory\.(Build|Packages)\.props$|\.editorconfig$|\.config/dotnet-tools\.json$)')
+          frontend=$(flag '^src/frontend/')
+          infra=$(flag '^infra/.*\.(bicep|bicepparam|json)$')
+          images=$(flag '^(src/backend/|src/frontend/|infra/sql/|global\.json$|Directory\.(Build|Packages)\.props$)')
+          e2e=false
+          if [ -d tests/e2e ]; then
+            e2e=$(flag '^(src/|tests/e2e/|infra/sql/|compose\.yaml$)')
+          fi
+
+          {
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "infra=$infra"
+            echo "images=$images"
+            echo "e2e=$e2e"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  backend:
+    name: backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - run: dotnet restore MyTodoApp.slnx
+      - run: dotnet build MyTodoApp.slnx -c Release --no-restore
+      - run: dotnet format MyTodoApp.slnx --verify-no-changes --no-restore
+      # Docker is available on ubuntu-latest for Testcontainers.
+      - run: dotnet test MyTodoApp.slnx -c Release --no-build
+
+  frontend:
+    name: frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  infra:
+    name: infra
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Bicep
+        run: az bicep install
+      - name: Build and lint Bicep (no Azure login)
+        env:
+          # Dummy values so the .bicepparam files compile; deploy.yml sets the real ones.
+          SQL_ADMIN_GROUP_OBJECT_ID: 00000000-0000-0000-0000-000000000000
+          API_IMAGE_TAG: ci
+          WEB_IMAGE_TAG: ci
+          MIGRATE_IMAGE_TAG: ci
+        run: |
+          set -euo pipefail
+          for entry in core apps; do
+            echo "::group::$entry"
+            az bicep build --file "infra/$entry.bicep" --outdir "$RUNNER_TEMP/bicep"
+            az bicep lint --file "infra/$entry.bicep"
+            az bicep build-params --file "infra/$entry.bicepparam" --outfile "$RUNNER_TEMP/bicep/$entry.parameters.json"
+            echo "::endgroup::"
+          done
+
+  images:
+    name: images
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build api image
+        run: docker build -t mytodoapp-api:ci -f src/backend/MyTodoApp.Api/Dockerfile src/backend
+      - name: Build web image
+        run: docker build -t mytodoapp-web:ci src/frontend
+      - name: Build migrate image
+        run: docker build -t mytodoapp-migrate:ci -f src/backend/Migrate.Dockerfile .
+
+  e2e:
+    name: e2e
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Start the app (docker compose)
+        working-directory: .
+        run: |
+          set -euo pipefail
+          # Throwaway SA password for this run only (local container, never stored).
+          MSSQL_SA_PASSWORD="Ci-$(openssl rand -hex 16)-Aa1"
+          echo "::add-mask::$MSSQL_SA_PASSWORD"
+          echo "MSSQL_SA_PASSWORD=$MSSQL_SA_PASSWORD" >> "$GITHUB_ENV"
+          MSSQL_SA_PASSWORD="$MSSQL_SA_PASSWORD" docker compose up --build -d --wait web
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report
+          retention-days: 7
+      - name: Stop the app
+        if: always()
+        working-directory: .
+        run: docker compose down -v
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, backend, frontend, infra, images, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check results of all jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done
+          echo "All jobs succeeded or were skipped."

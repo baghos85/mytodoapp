@@ -1,0 +1,11 @@
+# Build context for Migrate.Dockerfile is the repository root: send only what the image needs.
+*
+!infra/sql/
+!src/backend/
+**/bin/
+**/obj/
+**/*.user
+**/.vs/
+**/TestResults/
+**/appsettings.*.local.json
+**/appsettings.Local.json

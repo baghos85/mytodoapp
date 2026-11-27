@@ -1,0 +1,195 @@
+# Production deployment (SPEC 10.10, ADR-018, ADR-023). The only way anything is deployed to Azure.
+# Order: core Bicep -> build/push images (SHA tags) -> apps Bicep -> migration job (wait) -> API -> web -> smoke test.
+#
+# OIDC (ADR-005): the federated credential trusts only repo:baghos85/mytodoapp:ref:refs/heads/main.
+# Do NOT add `environment:` to the job: it changes the OIDC subject and login would fail.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-mytodoapp
+  API_APP: ca-mytodoapp-api
+  WEB_APP: ca-mytodoapp-web
+  MIGRATE_JOB: caj-mytodoapp-migrate
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check repository variables
+        env:
+          SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.SQL_ADMIN_GROUP_OBJECT_ID }}
+        run: |
+          if [ -z "$SQL_ADMIN_GROUP_OBJECT_ID" ]; then
+            echo "::error::Repository variable SQL_ADMIN_GROUP_OBJECT_ID is not set (object id of sg-mytodoapp-sql-admins, ADR-019)."
+            exit 1
+          fi
+
+      # 1. Azure login (OIDC, no stored credentials). Pinned to the v3.1.0 commit.
+      - name: Azure login
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure Azure CLI
+        run: |
+          az config set extension.use_dynamic_install=yes_without_prompt
+          az extension add --name containerapp --upgrade --only-show-errors
+          az bicep install
+
+      # 2. Core infrastructure: Log Analytics, environment, registry, identities + AcrPull, SQL.
+      - name: Deploy core infrastructure (infra/core.bicep)
+        id: core
+        env:
+          SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.SQL_ADMIN_GROUP_OBJECT_ID }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "core-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" \
+            --template-file infra/core.bicep \
+            --parameters infra/core.bicepparam \
+            --query properties.outputs --output json > "$RUNNER_TEMP/core-outputs.json"
+          echo "registry_name=$(jq -r .registryName.value "$RUNNER_TEMP/core-outputs.json")" >> "$GITHUB_OUTPUT"
+          echo "registry_server=$(jq -r .registryLoginServer.value "$RUNNER_TEMP/core-outputs.json")" >> "$GITHUB_OUTPUT"
+
+      # 3. Build and push images tagged with the full commit SHA (never latest).
+      - name: Build and push images
+        env:
+          REGISTRY_NAME: ${{ steps.core.outputs.registry_name }}
+          REGISTRY: ${{ steps.core.outputs.registry_server }}
+        run: |
+          set -euo pipefail
+          az acr login --name "$REGISTRY_NAME"
+          docker build -t "$REGISTRY/mytodoapp-api:$IMAGE_TAG" -f src/backend/MyTodoApp.Api/Dockerfile src/backend
+          docker build -t "$REGISTRY/mytodoapp-web:$IMAGE_TAG" src/frontend
+          docker build -t "$REGISTRY/mytodoapp-migrate:$IMAGE_TAG" -f src/backend/Migrate.Dockerfile .
+          for image in mytodoapp-api mytodoapp-web mytodoapp-migrate; do
+            docker push "$REGISTRY/$image:$IMAGE_TAG"
+          done
+
+      # 4. Apps: migration job with the new image; API and web keep their currently running images
+      #    (new SHA on the first deployment) until the migration has succeeded.
+      - name: Deploy apps (infra/apps.bicep)
+        id: apps
+        run: |
+          set -euo pipefail
+          current_tag() {
+            image=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$1" \
+              --query "properties.template.containers[0].image" --output tsv 2>/dev/null || true)
+            if [ -n "$image" ]; then echo "${image##*:}"; else echo "$IMAGE_TAG"; fi
+          }
+          export API_IMAGE_TAG WEB_IMAGE_TAG MIGRATE_IMAGE_TAG
+          API_IMAGE_TAG=$(current_tag "$API_APP")
+          WEB_IMAGE_TAG=$(current_tag "$WEB_APP")
+          MIGRATE_IMAGE_TAG="$IMAGE_TAG"
+          echo "api=$API_IMAGE_TAG web=$WEB_IMAGE_TAG migrate=$MIGRATE_IMAGE_TAG"
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "apps-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" \
+            --template-file infra/apps.bicep \
+            --parameters infra/apps.bicepparam \
+            --query properties.outputs --output json > "$RUNNER_TEMP/apps-outputs.json"
+          echo "web_fqdn=$(jq -r .webFqdn.value "$RUNNER_TEMP/apps-outputs.json")" >> "$GITHUB_OUTPUT"
+
+      # 5. Run the migration job and wait. On failure the old version keeps serving.
+      - name: Run database migration job
+        run: |
+          set -euo pipefail
+          execution=$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name "$MIGRATE_JOB" \
+            --query name --output tsv)
+          echo "Started execution $execution"
+          deadline=$((SECONDS + 600))
+          while true; do
+            status=$(az containerapp job execution show --resource-group "$RESOURCE_GROUP" --name "$MIGRATE_JOB" \
+              --job-execution-name "$execution" --query properties.status --output tsv)
+            echo "Status: $status"
+            case "$status" in
+              Succeeded) break ;;
+              Failed|Stopped|Degraded)
+                echo "::error::Migration job execution $execution ended with status $status. See ContainerAppConsoleLogs_CL in log-mytodoapp."
+                exit 1 ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Migration job execution $execution did not finish within 10 minutes."
+              exit 1
+            fi
+            sleep 15
+          done
+
+      # 6. Switch the API, then the web app, to the new images.
+      - name: Update API image
+        env:
+          REGISTRY: ${{ steps.core.outputs.registry_server }}
+        run: |
+          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
+            --image "$REGISTRY/mytodoapp-api:$IMAGE_TAG" --output none
+
+      - name: Update web image
+        env:
+          REGISTRY: ${{ steps.core.outputs.registry_server }}
+        run: |
+          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WEB_APP" \
+            --image "$REGISTRY/mytodoapp-web:$IMAGE_TAG" --output none
+
+      # 7. Smoke test with retries for cold start (scale from zero, SQL resume): up to 3 minutes.
+      - name: Smoke test
+        env:
+          WEB_FQDN: ${{ steps.apps.outputs.web_fqdn }}
+        run: |
+          set -euo pipefail
+          base="https://$WEB_FQDN"
+          body="$RUNNER_TEMP/me-body"
+          deadline=$((SECONDS + 180))
+          healthz_ok=false
+          api_ok=false
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ "$healthz_ok" != true ]; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$base/healthz" || echo 000)
+              echo "GET /healthz -> $code"
+              [ "$code" = 200 ] && healthz_ok=true
+            fi
+            if [ "$healthz_ok" = true ]; then
+              code=$(curl -s -o "$body" -w '%{http_code}' --max-time 90 "$base/api/v1/auth/me" || echo 000)
+              size=$(wc -c < "$body" 2>/dev/null || echo 0)
+              echo "GET /api/v1/auth/me -> $code ($size bytes)"
+              # Must be answered by the API through nginx (not 502/503/504 from nginx or the ingress).
+              # 401 once the auth issue lands. Until then the placeholder API answers 404 with an empty
+              # body (a 404 page from the ingress would have a body). The auth issue tightens this to 401 only.
+              if [ "$code" = 401 ] || { [ "$code" = 404 ] && [ "$size" -eq 0 ]; }; then
+                api_ok=true
+                break
+              fi
+            fi
+            sleep 10
+          done
+          if [ "$healthz_ok" != true ] || [ "$api_ok" != true ]; then
+            echo "::error::Smoke test failed (healthz_ok=$healthz_ok, api_ok=$api_ok)."
+            exit 1
+          fi
+          echo "Smoke test passed: $base"
+          echo "Deployed \`$IMAGE_TAG\` to $base" >> "$GITHUB_STEP_SUMMARY"

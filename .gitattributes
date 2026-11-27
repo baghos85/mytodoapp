@@ -1,0 +1,4 @@
+# Shell scripts and nginx config run in Linux containers: always LF.
+*.sh text eol=lf
+*.template text eol=lf
+*.conf text eol=lf

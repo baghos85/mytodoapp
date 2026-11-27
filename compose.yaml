@@ -1,0 +1,59 @@
+# Local production-like topology (ADR-024, SPEC 10.7): http://localhost:8080
+#   cp .env.example .env   # then set a local SA password
+#   docker compose up --build
+name: mytodoapp
+
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env (see .env.example)}
+    ports:
+      - "1433:1433"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -b -Q "SELECT 1" -o /dev/null',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  migrate:
+    build:
+      context: .
+      dockerfile: src/backend/Migrate.Dockerfile
+    environment:
+      # Local SQL Server has no Entra users: API_CLIENT_ID stays unset, so the grant step is skipped.
+      ConnectionStrings__AppDb: Server=sql,1433;Database=MyTodoApp;User Id=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+    depends_on:
+      sql:
+        condition: service_healthy
+
+  api:
+    build:
+      context: src/backend
+      dockerfile: MyTodoApp.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__AppDb: Server=sql,1433;Database=MyTodoApp;User Id=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+    ports:
+      - "5080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: src/frontend
+    environment:
+      API_UPSTREAM: http://api:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      api:
+        condition: service_started

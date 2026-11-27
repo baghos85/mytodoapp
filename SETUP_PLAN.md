@@ -50,9 +50,9 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
 
 ## Phase 3: GitHub Guardrails
 
-- [ ] 3.1 Enable branch protection on `main`: require PRs, passing checks, and 1 approval (me).
-- [ ] 3.2 Create issue labels: `backend`, `frontend`, `devops`, `bug`, `spec`.
-- [ ] 3.3 Create a `docs/` folder with `SPEC.md` and `DECISIONS.md` (shared memory for agents).
+- [x] 3.1 Enable branch protection on `main`: require PRs, passing checks, and 1 approval (me).
+- [x] 3.2 Create issue labels: `backend`, `frontend`, `devops`, `bug`, `spec`.
+- [x] 3.3 Create a `docs/` folder with `SPEC.md` and `DECISIONS.md` (shared memory for agents).
 
 ## Phase 4: Specification (architect agent)
 

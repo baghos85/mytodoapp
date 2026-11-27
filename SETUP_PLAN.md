@@ -63,13 +63,13 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
 
 ## Phase 5: Infrastructure & Pipeline (devops agent)
 
-- [ ] 5.1 Write infra-as-code in `infra/` (Bicep): Container Apps environment, container registry, app(s), logging.
-- [ ] 5.2 Write the Dockerfile(s).
-- [ ] 5.3 Write GitHub Actions:
+- [x] 5.1 Write infra-as-code in `infra/` (Bicep): Container Apps environment, container registry, app(s), logging.
+- [x] 5.2 Write the Dockerfile(s).
+- [x] 5.3 Write GitHub Actions:
   - `ci.yml`: on PR → lint, test, build
   - `deploy.yml`: on merge to main → build image, push, deploy to Azure via OIDC
-- [ ] 5.4 Open a PR for the infra + pipeline; reviewer agent reviews it.
-- [ ] 5.5 **[HUMAN]** I approve and merge. Verify the first (empty/hello-world) deployment works and share the URL.
+- [x] 5.4 Open a PR for the infra + pipeline; reviewer agent reviews it.
+- [x] 5.5 **[HUMAN]** I approve and merge. Verify the first (empty/hello-world) deployment works and share the URL.
 
 ## Phase 6: Build the Product (dev + reviewer agents)
 

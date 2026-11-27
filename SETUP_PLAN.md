@@ -32,7 +32,7 @@ Goal: a real project built entirely by AI agents (Claude CLI), coordinating thro
 - [x] 1.4 Create the Azure resource group (e.g. `rg-<project>`) with `az group create`.
 - [x] 1.5 **[HUMAN]** Set a budget alert on the resource group in the Azure portal.
 - [x] 1.6 Set up Azure auth for GitHub Actions using OIDC (federated credential) scoped to the resource group only. Prepare the commands for me.
-- [ ] 1.7 **[HUMAN]** Add the required values (client ID, tenant ID, subscription ID) as GitHub repo secrets.
+- [x] 1.7 **[HUMAN]** Add the required values (client ID, tenant ID, subscription ID) as GitHub repo secrets.
 
 ## Phase 2: Agent Configuration
 

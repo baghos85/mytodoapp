@@ -1,8 +1,8 @@
 # Production deployment (SPEC 10.10, ADR-018, ADR-023). The only way anything is deployed to Azure.
 # Order: core Bicep -> build/push images (SHA tags) -> apps Bicep -> migration job (wait) -> API -> web -> smoke test.
 #
-# OIDC (ADR-005): the federated credential trusts only repo:baghos85/mytodoapp:ref:refs/heads/main.
-# Do NOT add `environment:` to the job: it changes the OIDC subject and login would fail.
+# OIDC (ADR-005): the federated credentials trust only the main branch of this repo (classic subject and the
+# immutable-id subject). Do NOT add `environment:` to the job: it changes the OIDC subject and login would fail.
 name: Deploy
 
 on:
@@ -98,14 +98,30 @@ jobs:
         id: apps
         run: |
           set -euo pipefail
+          # Sets variable $2 to the image tag app $1 runs now, or to the new SHA only if the app does not exist
+          # (first deployment). Any az error fails the step, so a transient error can't skip migrate-first.
           current_tag() {
-            image=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$1" \
-              --query "properties.template.containers[0].image" --output tsv 2>/dev/null || true)
-            if [ -n "$image" ]; then echo "${image##*:}"; else echo "$IMAGE_TAG"; fi
+            local count image
+            if ! count=$(az containerapp list --resource-group "$RESOURCE_GROUP" \
+              --query "length([?name=='$1'])" --output tsv); then
+              echo "::error::Could not list container apps in $RESOURCE_GROUP to read the image of $1."
+              exit 1
+            fi
+            if [ "$count" = 0 ]; then
+              echo "$1 does not exist yet (first deployment): using the new image tag."
+              printf -v "$2" '%s' "$IMAGE_TAG"
+              return
+            fi
+            if ! image=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$1" \
+              --query "properties.template.containers[0].image" --output tsv) || [ -z "$image" ]; then
+              echo "::error::Could not read the current image of $1."
+              exit 1
+            fi
+            printf -v "$2" '%s' "${image##*:}"
           }
           export API_IMAGE_TAG WEB_IMAGE_TAG MIGRATE_IMAGE_TAG
-          API_IMAGE_TAG=$(current_tag "$API_APP")
-          WEB_IMAGE_TAG=$(current_tag "$WEB_APP")
+          current_tag "$API_APP" API_IMAGE_TAG
+          current_tag "$WEB_APP" WEB_IMAGE_TAG
           MIGRATE_IMAGE_TAG="$IMAGE_TAG"
           echo "api=$API_IMAGE_TAG web=$WEB_IMAGE_TAG migrate=$MIGRATE_IMAGE_TAG"
           az deployment group create \
@@ -132,6 +148,7 @@ jobs:
               Succeeded) break ;;
               Failed|Stopped|Degraded)
                 echo "::error::Migration job execution $execution ended with status $status. See ContainerAppConsoleLogs_CL in log-mytodoapp."
+                echo "::notice::On the very first deployment this is expected until id-mytodoapp-migrate is a member of sg-mytodoapp-sql-admins (ADR-019). Group membership can take hours to apply because managed identity tokens are cached. After adding it, wait, then re-run this workflow."
                 exit 1 ;;
             esac
             if [ "$SECONDS" -ge "$deadline" ]; then
@@ -191,5 +208,34 @@ jobs:
             echo "::error::Smoke test failed (healthz_ok=$healthz_ok, api_ok=$api_ok)."
             exit 1
           fi
+
+          # In single revision mode the old revision keeps serving if the new one fails its probes, and the
+          # old and new placeholder answer the same way. So also check that the latest revision of each app
+          # is the ready, active, healthy one and runs this run's image tag. az errors are retried until the deadline.
+          revision_ok() {
+            local app=$1 json rev ready
+            json=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$app" --output json \
+              --query "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}") || return 1
+            rev=$(jq -r '.latest // empty' <<< "$json")
+            ready=$(jq -r '.ready // empty' <<< "$json")
+            if [ -z "$rev" ] || [ "$ready" != "$rev" ]; then
+              echo "$app: latest revision '$rev' is not the latest ready one ('$ready') yet"
+              return 1
+            fi
+            json=$(az containerapp revision show --resource-group "$RESOURCE_GROUP" --name "$app" \
+              --revision "$rev" --output json --query "{image: properties.template.containers[0].image,
+                active: properties.active, health: properties.healthState}") || return 1
+            echo "$app: $rev $(jq -c . <<< "$json")"
+            jq -e --arg tag "$IMAGE_TAG" \
+              '(.image | endswith(":" + $tag)) and .active == true and .health == "Healthy"' <<< "$json" > /dev/null
+          }
+          deadline=$((SECONDS + 180))
+          until revision_ok "$API_APP" && revision_ok "$WEB_APP"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::The latest revision of $API_APP or $WEB_APP is not the active, healthy one running $IMAGE_TAG. The previous revision may still be serving; check the revision logs."
+              exit 1
+            fi
+            sleep 10
+          done
           echo "Smoke test passed: $base"
           echo "Deployed \`$IMAGE_TAG\` to $base" >> "$GITHUB_STEP_SUMMARY"

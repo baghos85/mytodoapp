@@ -65,6 +65,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 
 **Decision:**
 - Entra app registration **`gh-mytodoapp-deploy`** with a federated credential trusting only `repo:baghos85/mytodoapp:ref:refs/heads/main`.
+  - *Update (2026-11-27):* GitHub now issues OIDC subjects with immutable ids: `repo:<owner>@<ownerId>/<repo>@<repoId>:ref:refs/heads/main`. The first deployment failed with `AADSTS700213` (no matching federated identity record). The owner added a second federated credential **`gh-main-immutable`** with that subject format; the original credential is kept. Both still trust only `main`.
 - Roles, scoped to `rg-mytodoapp` only: **Contributor**, plus **Role Based Access Control Administrator** with a condition that allows assigning or removing **only the AcrPull role** (so Bicep can let the container apps pull images).
 - GitHub repo secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not passwords).
 - Agents and humans never run `az deployment ... create`; the agent permission rules block it.
@@ -212,7 +213,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 **Decision:**
 - In `rg-mytodoapp` (France Central): `log-mytodoapp` (30-day retention), `cae-mytodoapp` (Consumption, no VNet), `acrmytodoapp<sfx>` (Basic, admin user off), `ca-mytodoapp-web`, `ca-mytodoapp-api`, `caj-mytodoapp-migrate`, `sql-mytodoapp-<sfx>` / `sqldb-mytodoapp`, identities `id-mytodoapp-{web,api,migrate}`. `<sfx>` = `take(uniqueString(resourceGroup().id), 6)` only for globally unique names.
 - One user-assigned identity per app, each with AcrPull only (plus SQL rights per ADR-019).
-- Both apps: min replicas 0, max 2, 0.25 vCPU / 0.5 GiB. SQL: serverless GP_S_Gen5, max 1 vCore, auto-pause 60 min, 2 GB, PITR 7 days, **Local** backup redundancy (backups stay in France Central).
+- Both apps: min replicas 0, max 2, 0.25 vCPU / 0.5 GiB. SQL: serverless GP_S_Gen5, max 2 vCores, free-offer defaults for size (32 GB) and auto-pause (fixed 15 min), PITR 7 days, **Local** backup redundancy (backups stay in France Central).
 - SQL uses the **Azure SQL Database free offer** (owner decision, step 4.3): `useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`. When the monthly free allowance is used up, the database auto-pauses until the next month; usage over the limit is **never billed** (`BillOverUsage` is not allowed).
 - Images tagged with the commit SHA.
 
@@ -310,7 +311,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 
 **Decision:**
 - `ci.yml` always runs on PRs; a `changes` job (plain `git diff`, no third-party action) decides which jobs run (backend, frontend, infra, images, e2e). An aggregate **`ci-ok`** job is the single required status check, so skipped jobs never block a PR.
-- `deploy.yml` on push to `main` (docs-only changes ignored) and `workflow_dispatch`: deploy `infra/core.bicep` → build/push images (SHA tags) → deploy `infra/apps.bicep` (job with new image, apps with current images) → run migration job → update API, then web → smoke test (`/healthz` 200, `/api/v1/auth/me` 401).
+- `deploy.yml` on push to `main` (docs-only changes ignored) and `workflow_dispatch`: deploy `infra/core.bicep` → build/push images (SHA tags) → deploy `infra/apps.bicep` (job with new image, apps with current images) → run migration job → update API, then web → smoke test (`/healthz` 200, `/api/v1/auth/me` 401, and for API and web the latest revision is the ready, active, healthy one running this run's image tag).
 - No GitHub `environment:` on the deploy job, because it would change the OIDC subject away from `ref:refs/heads/main` (ADR-005).
 
 **Alternatives:** Path filters on the workflow trigger (simpler, but required checks would stay "pending" on PRs that don't match); a single Bicep file with placeholder images on the first deployment (fragile probes and ordering).

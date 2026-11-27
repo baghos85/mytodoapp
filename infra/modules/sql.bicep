@@ -53,35 +53,29 @@ resource database 'Microsoft.Sql/servers/databases@2025-01-01' = {
   name: databaseName
   location: location
   tags: tags
+  // Serverless, as in Microsoft's free-offer template (2 vCores; AutoPause caps it at 4 vCores / 32 GB).
   sku: {
     name: 'GP_S_Gen5'
     tier: 'GeneralPurpose'
     family: 'Gen5'
-    capacity: 1
+    capacity: 2
   }
+  // Free offer (ADR-017). No maxSizeBytes, minCapacity or autoPauseDelay: the free offer allows only the
+  // default max size (32 GB) and fixes auto-pause at 15 minutes; setting them fails the deployment.
   properties: {
     collation: 'SQL_Latin1_General_CP1_CI_AS'
-    maxSizeBytes: 2147483648 // 2 GB
-    minCapacity: json('0.5')
-    autoPauseDelay: 60
     zoneRedundant: false
     // Backups stay in France Central (privacy notice).
     requestedBackupStorageRedundancy: 'Local'
-    // Azure SQL free offer (ADR-017): pause for the rest of the month when the allowance is used up.
-    // Never 'BillOverUsage'.
+    // Pause for the rest of the month when the allowance is used up. Never 'BillOverUsage'.
     useFreeLimit: true
     freeLimitExhaustionBehavior: 'AutoPause'
   }
 }
 
-// Point-in-time restore: 7 days (privacy notice, SPEC 7.8).
-resource shortTermRetention 'Microsoft.Sql/servers/databases/backupShortTermRetentionPolicies@2025-01-01' = {
-  parent: database
-  name: 'default'
-  properties: {
-    retentionDays: 7
-  }
-}
+// Point-in-time restore is 7 days (privacy notice, SPEC 7.8). With AutoPause the free offer fixes PITR at
+// 7 days and LRS, so there is no backupShortTermRetentionPolicies resource. Add one with retentionDays: 7
+// if the database ever leaves the free offer.
 
 output serverName string = server.name
 output serverFqdn string = server.properties.fullyQualifiedDomainName

@@ -9,3 +9,4 @@ Agents: read this before starting work, and add to it whenever the owner correct
 - 2026-11-27: MCP servers timed out (30s) on first start while `npx` downloaded them → pre-warm with `npx -y <pkg>@latest --version`, then reconnect via `/mcp`.
 - 2026-11-27: `gh api --input` returned "Problems parsing JSON" → PowerShell 5.1 `Set-Content -Encoding utf8` writes a BOM; use `[IO.File]::WriteAllText(path, json, (New-Object System.Text.UTF8Encoding($false)))`.
 - 2026-11-27: Migrate image build failed: `tar -xj` needs `bzip2`, which `dotnet/sdk:10.0` doesn't have → install tools a build stage needs explicitly; don't assume they're in the base image.
+- 2026-11-27: First deploy failed with `AADSTS700213`: GitHub's OIDC subject now includes owner/repo ids → add a federated credential with the immutable-id subject (see ADR-005).

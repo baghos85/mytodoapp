@@ -18,8 +18,8 @@ log_format json_access escape=json '{"time":"$time_iso8601","remote_addr":"$remo
     '"user_agent":"$http_user_agent"}';
 
 server {
+    # IPv4 only: the ingress connects over IPv4, and a hard-coded IPv6 listen stops nginx on hosts without IPv6.
     listen 8080;
-    listen [::]:8080;
     server_name _;
 
     root /usr/share/nginx/html;
@@ -55,10 +55,10 @@ server {
         client_max_body_size 64k;
     }
 
-    # Hashed build assets: cache forever.
+    # Hashed build assets: cache forever. No `always`, so a 404 for a missing asset is not cached for a year.
     location /assets/ {
         include /etc/nginx/snippets/security-headers.conf;
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
     }
 

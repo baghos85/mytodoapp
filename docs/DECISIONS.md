@@ -205,7 +205,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-017: Azure resource topology, naming and sizing
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** The devops agent needs exact resource names and cost-efficient settings (CLAUDE.md: scale to zero, serverless SQL).
 
@@ -213,16 +213,17 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 - In `rg-mytodoapp` (France Central): `log-mytodoapp` (30-day retention), `cae-mytodoapp` (Consumption, no VNet), `acrmytodoapp<sfx>` (Basic, admin user off), `ca-mytodoapp-web`, `ca-mytodoapp-api`, `caj-mytodoapp-migrate`, `sql-mytodoapp-<sfx>` / `sqldb-mytodoapp`, identities `id-mytodoapp-{web,api,migrate}`. `<sfx>` = `take(uniqueString(resourceGroup().id), 6)` only for globally unique names.
 - One user-assigned identity per app, each with AcrPull only (plus SQL rights per ADR-019).
 - Both apps: min replicas 0, max 2, 0.25 vCPU / 0.5 GiB. SQL: serverless GP_S_Gen5, max 1 vCore, auto-pause 60 min, 2 GB, PITR 7 days, **Local** backup redundancy (backups stay in France Central).
+- SQL uses the **Azure SQL Database free offer** (owner decision, step 4.3): `useFreeLimit: true`, `freeLimitExhaustionBehavior: 'AutoPause'`. When the monthly free allowance is used up, the database auto-pauses until the next month; usage over the limit is **never billed** (`BillOverUsage` is not allowed).
 - Images tagged with the commit SHA.
 
-**Alternatives:** One shared identity for all apps (simpler, but the web app would hold SQL-capable credentials); a VNet with private endpoints (more secure, costs more and adds complexity).
+**Alternatives:** One shared identity for all apps (simpler, but the web app would hold SQL-capable credentials); a VNet with private endpoints (more secure, costs more and adds complexity); regular billed serverless SQL, or the free offer with bill-over-usage (no monthly outage, but costs money).
 
-**Consequences:** Near-zero idle cost; cold starts after idle. Bicep is split into `core.bicep` and `apps.bicep` (ADR-023).
+**Consequences:** Near-zero idle cost; cold starts after idle. Bicep is split into `core.bicep` and `apps.bicep` (ADR-023). With the free offer, if the allowance runs out the app is **unavailable until the month resets** (API calls that need the database fail; migrations fail too), while `/health` and `/healthz` stay green because they don't touch the database (ADR-016), so it is visible only as API errors in the logs. The free offer is limited per subscription; if it can't be used, the devops agent asks the owner instead of falling back to a billed tier (SPEC 10.1).
 
 ---
 
 ## ADR-018: Database migrations: EF Core bundle run by a Container Apps Job
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** Migrations must run in Azure on each deployment. The deploy identity (ADR-005) has no SQL data-plane access, the API connects with Entra-only managed identity, and SQL serverless may need ~1 minute to resume.
 
@@ -238,7 +239,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-019: Azure SQL: Entra-only auth, per-app managed identities, admin group
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** No passwords (CLAUDE.md). Someone must be SQL Entra admin, and the API's database user must be created.
 
@@ -247,7 +248,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 - `id-mytodoapp-api` gets `db_datareader` + `db_datawriter` only. The migration job creates/grants it on every run with an idempotent script (`CREATE USER ... FROM EXTERNAL PROVIDER WITH OBJECT_ID = ...`, so the server needs no Graph "Directory Readers" role).
 - Connection strings use `Authentication=Active Directory Managed Identity;User Id=<client id>` (no secret).
 - Network: public endpoint with only the "Allow Azure services" rule; no client-IP rules.
-- One-time owner steps: create the group, add yourself, set the variable; after the first deployment, add `id-mytodoapp-migrate` to the group and re-run the migration step.
+- One-time owner steps (agreed by the owner in step 4.3; an owner action in Phase 5 before the first deployment): create the group, add yourself, set the variable; after the first deployment, add `id-mytodoapp-migrate` to the group and re-run the migration step.
 
 **Alternatives:** (1) Owner as the only Entra admin and a one-time manual SQL script to create both identities' users: fewer automated admin rights, but a manual data-plane step that needs a client firewall rule. (2) `id-mytodoapp-migrate` as the direct Entra admin: zero manual steps, but the owner has no direct DB access without a Bicep change.
 
@@ -256,7 +257,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-020: Persist Data Protection keys in Azure SQL
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** The Identity cookie is encrypted with ASP.NET Core Data Protection keys. By default they live in the container's file system, which is lost on every restart, scale-from-zero and new revision, so all users would be signed out constantly and replicas couldn't read each other's cookies.
 
@@ -269,7 +270,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-021: Backend composition details
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** ADR-002 sets the layers; agents need the concrete wiring to be consistent.
 
@@ -289,7 +290,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-022: Test databases and deterministic time
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** CLAUDE.md requires handler unit tests and endpoint integration tests that are deterministic. Behaviour that matters (case-insensitive unique names, cascades, filtered unique index, migrations, `DateOnly` mapping) is SQL Server-specific.
 
@@ -305,7 +306,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-023: CI/CD workflow shape
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Decision:**
 - `ci.yml` always runs on PRs; a `changes` job (plain `git diff`, no third-party action) decides which jobs run (backend, frontend, infra, images, e2e). An aggregate **`ci-ok`** job is the single required status check, so skipped jobs never block a PR.
@@ -319,7 +320,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-024: Local development with docker compose
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Decision:** `compose.yaml` at the repo root with `sql` (SQL Server 2022 Developer container), `migrate`, `api` and `web`; `docker compose up --build` reproduces the production topology at `http://localhost:8080` and is what Playwright runs against. Inner loop: compose `sql` + `migrate`, `dotnet run` for the API (user-secrets connection string) and `npm run dev` with the Vite proxy. The local SA password lives in a git-ignored `.env` (`.env.example` committed).
 
@@ -330,7 +331,7 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 ---
 
 ## ADR-025: Package and image baseline
-**Status:** Proposed
+**Status:** Accepted (2026-11-27)
 
 **Context:** CLAUDE.md: ask before adding any NuGet/npm package and record why. This is the baseline the agents may use without asking again; anything else still needs approval.
 

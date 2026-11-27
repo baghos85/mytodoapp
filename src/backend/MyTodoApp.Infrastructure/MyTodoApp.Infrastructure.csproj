@@ -3,12 +3,18 @@
   <!-- Infrastructure: EF Core DbContext, configurations, migrations, Identity, implementations of Application interfaces. -->
 
   <ItemGroup>
-    <!-- Shared framework (not a NuGet package): configuration/DI abstractions now; Identity and Data Protection later. -->
+    <!-- Shared framework (not a NuGet package): configuration/DI abstractions, Identity and Data Protection. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MyTodoApp.Application\MyTodoApp.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
   </ItemGroup>
 
 </Project>

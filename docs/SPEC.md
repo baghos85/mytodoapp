@@ -766,7 +766,7 @@ src/frontend/
   Dockerfile  nginx/default.conf.template  vite.config.ts  index.html  public/ (icons)
   src/
     main.tsx
-    app/        App.tsx, router.tsx, providers.tsx (QueryClient), RequireAuth.tsx, layout/ (AppShell, Sidebar, BottomNav, TopBar)
+    app/        App.tsx, router.ts (lazy route objects), providers.tsx (AppProviders), queryClient.ts (createQueryClient), routeHandle.ts, RequireAuth.tsx, layout/ (AppShell, Sidebar, BottomNav, TopBar, PublicLayout)
     features/
       auth/     api.ts, hooks.ts (useMe, useLogin, useRegister, useLogout), LoginPage, RegisterPage
       account/  AccountPage, DeleteAccountDialog

@@ -349,3 +349,9 @@ Format: `## ADR-NNN: Title` → **Status** (Proposed / Accepted / Superseded by 
 - Deliberately **not** used: MediatR, AutoMapper, FluentValidation, FluentAssertions (commercial from v8), Moq, Scrutor, UI component libraries, CSS-in-JS, MSW (may be proposed later).
 
 **Consequences:** All baseline packages are MIT/Apache and maintained by Microsoft or large communities. Version bumps within these packages need no ADR.
+
+**Update (2026-11-27, owner decision, #12):**
+
+- Approved as explicit npm dev dependencies: `@types/react`, `@types/react-dom`, `@testing-library/dom` (peer of `@testing-library/react`) and `workbox-build` (peer of `vite-plugin-pwa`; build-time only, so `vite-plugin-pwa` is also a dev dependency).
+- Rule widened: this ADR also pre-approves (a) `@types/*` packages for approved libraries and (b) required peer dependencies of approved packages. Anything else still needs approval.
+- `eslint` and `@eslint/js` are pinned to 9.x because `eslint-plugin-jsx-a11y` (6.10.2) only supports ESLint ≤ 9; move to 10 once jsx-a11y supports it.

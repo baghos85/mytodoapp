@@ -38,6 +38,8 @@ __pycache__/
 
 # --- Claude Code (local, per-user) ---
 .claude/settings.local.json
+.claude/worktrees/
+.worktrees/
 
 # --- Azure / IaC ---
 .azure/

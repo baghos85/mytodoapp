@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Domain: entities, value objects, domain exceptions. No project or package references (CLAUDE.md). -->
+
+</Project>

@@ -1,0 +1,18 @@
+<Project>
+
+  <!-- Runtime package versions: src/backend/Directory.Packages.props (visible to the API Docker build). -->
+  <Import Project="$(MSBuildThisFileDirectory)src/backend/Directory.Packages.props" />
+
+  <!-- Test packages (ADR-025 baseline only; ask before adding a package). -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
+    <!--
+      Stay on xunit.v3 3.x / runner 3.x: 4.x uses Microsoft.Testing.Platform v2, which drops the VSTest mode of
+      `dotnet test`. CI runs `dotnet test MyTodoApp.slnx` (VSTest mode); MTP mode rejects a positional solution path.
+    -->
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+  </ItemGroup>
+
+</Project>

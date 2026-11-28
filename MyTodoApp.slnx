@@ -1,5 +1,21 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="src/backend/Directory.Build.props" />
+    <File Path="src/backend/Directory.Packages.props" />
+  </Folder>
   <Folder Name="/src/">
+    <Project Path="src/backend/MyTodoApp.Domain/MyTodoApp.Domain.csproj" />
+    <Project Path="src/backend/MyTodoApp.Application/MyTodoApp.Application.csproj" />
+    <Project Path="src/backend/MyTodoApp.Infrastructure/MyTodoApp.Infrastructure.csproj" />
     <Project Path="src/backend/MyTodoApp.Api/MyTodoApp.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MyTodoApp.Domain.UnitTests/MyTodoApp.Domain.UnitTests.csproj" />
+    <Project Path="tests/MyTodoApp.Application.UnitTests/MyTodoApp.Application.UnitTests.csproj" />
+    <Project Path="tests/MyTodoApp.Api.IntegrationTests/MyTodoApp.Api.IntegrationTests.csproj" />
   </Folder>
 </Solution>

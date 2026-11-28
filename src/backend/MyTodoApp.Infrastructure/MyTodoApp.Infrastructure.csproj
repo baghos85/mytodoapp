@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Infrastructure: EF Core DbContext, configurations, migrations, Identity, implementations of Application interfaces. -->
+
+  <ItemGroup>
+    <!-- Shared framework (not a NuGet package): configuration/DI abstractions now; Identity and Data Protection later. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MyTodoApp.Application\MyTodoApp.Application.csproj" />
+  </ItemGroup>
+
+</Project>

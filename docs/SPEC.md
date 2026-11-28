@@ -766,7 +766,7 @@ src/frontend/
   Dockerfile  nginx/default.conf.template  vite.config.ts  index.html  public/ (icons)
   src/
     main.tsx
-    app/        App.tsx, router.tsx, providers.tsx (QueryClient), RequireAuth.tsx, layout/ (AppShell, Sidebar, BottomNav, TopBar)
+    app/        App.tsx, router.ts (lazy route objects), providers.tsx (AppProviders), queryClient.ts (createQueryClient), routeHandle.ts, RequireAuth.tsx, layout/ (AppShell, Sidebar, BottomNav, TopBar, PublicLayout)
     features/
       auth/     api.ts, hooks.ts (useMe, useLogin, useRegister, useLogout), LoginPage, RegisterPage
       account/  AccountPage, DeleteAccountDialog
@@ -796,7 +796,7 @@ src/frontend/
   | `['tasks','completed']`, `['tasks','detail', id]` | |
   - Invalidation: any task mutation → `['tasks']` + `['lists']` (counts). List create/rename → `['lists']`; list delete → `['lists']` + `['tasks']`.
   - Complete/uncomplete is optimistic (6.4): cancel `['tasks']` queries, remove/update the task in cached views, roll back on error, invalidate on settle.
-  - Defaults: `staleTime` 30 s, `refetchOnWindowFocus: true`, queries `networkMode: 'offlineFirst'` (so offline requests still reach the service worker cache), retry once only on `NetworkError`/timeout/`503`, never on 4xx.
+  - Defaults: `staleTime` 30 s, `refetchOnWindowFocus: true`, queries `networkMode: 'offlineFirst'` (so offline requests still reach the service worker cache), retry once only on `NetworkError`/timeout/`503`, never on 4xx. Mutations: `networkMode: 'always'`, `retry: false` (never paused or replayed offline; they fail fast with `NetworkError`).
   - Global `QueryCache`/`MutationCache` `onError`: `401` (except from `me`/`login`) → `clearClientData()` + navigate to `/login?returnUrl=...`.
 - **`clearClientData()`:** `queryClient.clear()` + `caches.delete('api-v1')`. Called on sign-out, account deletion and `401`.
 - **PWA (vite-plugin-pwa):** `registerType: 'prompt'`, `injectRegister: false` (register via `virtual:pwa-register/react`, no inline script), manifest per 7.5. Workbox: precache all build output (app shell incl. the Privacy chunk); `navigateFallback: 'index.html'`, deny-list `^/api/`, `^/health`, `^/healthz`; runtime caching for same-origin `GET /api/v1/*`: `NetworkFirst`, `cacheName: 'api-v1'`, `networkTimeoutSeconds: 10`, `maxEntries: 100`, `maxAgeSeconds: 604800`, `cacheableResponse.statuses: [200]`. Non-GET requests are not cached.

@@ -1,0 +1,35 @@
+.topBar {
+  position: sticky;
+  z-index: 10;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--top-bar-height);
+  padding: 0 var(--space-2);
+  padding-top: env(safe-area-inset-top);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+}
+
+.menuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+}
+
+.menuButton:hover {
+  background: var(--color-surface);
+}
+
+.title {
+  padding: 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: 700;
+}

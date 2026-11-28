@@ -1,0 +1,10 @@
+.main {
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-4);
+}
+
+.main:focus {
+  outline: none;
+}

@@ -1,0 +1,68 @@
+/* Above the mobile bottom navigation; bottom-right from tablet up. */
+.viewport {
+  position: fixed;
+  z-index: 50;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: calc(var(--bottom-nav-height) + var(--space-4) + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+@media (min-width: 640px) {
+  .viewport {
+    left: auto;
+    bottom: var(--space-4);
+    width: 24rem;
+  }
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--color-text);
+  color: var(--color-bg);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.error {
+  background: var(--color-danger);
+}
+
+.message {
+  flex: 1;
+}
+
+.action,
+.dismiss {
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.action {
+  padding: 0 var(--space-3);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action:focus-visible,
+.dismiss:focus-visible {
+  outline-color: var(--color-bg);
+}

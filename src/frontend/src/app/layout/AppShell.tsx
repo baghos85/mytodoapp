@@ -20,6 +20,10 @@ export function AppShell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = () => setDrawerOpen(false);
 
+  // The drawer exists only at tablet width. Reset it when the viewport leaves that range, so it doesn't
+  // reopen by itself on the way back (state adjusted during render, no effect needed).
+  if (drawerOpen && breakpoint !== 'tablet') setDrawerOpen(false);
+
   return (
     <div className={`${styles.shell} ${styles[breakpoint] ?? ''}`}>
       {breakpoint === 'desktop' ? (

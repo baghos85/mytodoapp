@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { isOnline } from '../lib/connectivity';
-import { apiFetch } from './client';
-import { ApiError, NetworkError } from './errors';
+import { apiFetch, SW_CACHE_HEADER } from './client';
+import { ApiError, NetworkError, UnexpectedResponseError } from './errors';
 
 type FetchMock = Mock<typeof fetch>;
 
@@ -168,6 +168,70 @@ describe('apiFetch', () => {
     expect(error).toMatchObject({ kind: 'timeout' });
     // A slow server is not "offline".
     expect(isOnline()).toBe(true);
+  });
+
+  it('apiFetch_2xxWithHtmlBody_ThrowsUnexpectedResponseError', async () => {
+    fetchMock.mockResolvedValue(
+      new Response('<!doctype html><html></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+
+    const error = await apiFetch('/task-lists').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnexpectedResponseError);
+    expect(error).toMatchObject({ status: 200, contentType: 'text/html' });
+  });
+
+  it('apiFetch_2xxWithMalformedJson_ThrowsUnexpectedResponseError', async () => {
+    fetchMock.mockResolvedValue(
+      new Response('{"items": [', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const error = await apiFetch('/task-lists').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnexpectedResponseError);
+    expect(error).not.toBeInstanceOf(SyntaxError);
+  });
+
+  it('apiFetch_BodyStallsAfterHeaders_ThrowsTimeoutNetworkError', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation((_input, init) => {
+      const stalledBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () =>
+            controller.error(new DOMException('The operation was aborted.', 'AbortError')),
+          );
+        },
+      });
+      return Promise.resolve(
+        new Response(stalledBody, { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+    });
+
+    const outcome = apiFetch('/tasks/completed').catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    const error = await outcome;
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ kind: 'timeout' });
+  });
+
+  it('apiFetch_ServiceWorkerCacheHitAfterNetworkFailure_StaysOffline', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', [SW_CACHE_HEADER]: 'hit' },
+      }),
+    );
+
+    await apiFetch('/task-lists').catch(() => undefined);
+    const result = await apiFetch('/task-lists');
+
+    expect(result).toEqual({ items: [] });
+    expect(isOnline()).toBe(false);
   });
 
   it('apiFetch_CallerAborts_RethrowsAbortWithoutGoingOffline', async () => {

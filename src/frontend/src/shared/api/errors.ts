@@ -46,6 +46,22 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * The API answered 2xx, but the body is not the JSON we expect (e.g. a wrong `VITE_API_BASE_URL` that hits
+ * the SPA fallback `index.html`). A configuration or deployment bug, not worth a retry.
+ */
+export class UnexpectedResponseError extends Error {
+  readonly status: number;
+  readonly contentType: string | null;
+
+  constructor(status: number, contentType: string | null, options?: { cause?: unknown }) {
+    super('The server sent an unexpected response.', options);
+    this.name = 'UnexpectedResponseError';
+    this.status = status;
+    this.contentType = contentType;
+  }
+}
+
 /** Worth one retry (SPEC 7.4, 10.8): no response, a timeout, or 503. Never 4xx. */
 export function isRetryableError(error: unknown): boolean {
   return error instanceof NetworkError || (error instanceof ApiError && error.status === 503);

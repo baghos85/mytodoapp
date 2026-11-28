@@ -13,6 +13,12 @@ export function createQueryClient(): QueryClient {
         // One retry, only for no response / timeout / 503 (cold start). Never for 4xx.
         retry: (failureCount, error) => failureCount < 1 && isRetryableError(error),
       },
+      mutations: {
+        // Never paused or queued while offline (SPEC 7.5, ADR-016): an offline mutation fails fast with
+        // NetworkError (which also switches the UI to offline mode) instead of replaying later.
+        networkMode: 'always',
+        retry: false,
+      },
     },
   });
 }

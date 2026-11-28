@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { renderRoute } from '../../test/renderWithProviders';
 import { setViewportWidth, viewports } from '../../test/viewport';
@@ -54,6 +54,50 @@ describe('AppShell', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Upcoming' })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/upcoming');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('AppShell_ViewportGrowsToDesktopWithDrawerOpen_DrawerStaysClosedBackAtTablet', async () => {
+    setViewportWidth(viewports.tablet);
+    const { user } = await renderToday();
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument();
+
+    act(() => setViewportWidth(viewports.desktop));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeInTheDocument();
+
+    act(() => setViewportWidth(viewports.tablet));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('AppShell_ClientSideNavigation_MovesFocusToPageHeading', async () => {
+    const { user } = await renderToday();
+    // First load: focus is not moved.
+    expect(document.body).toHaveFocus();
+
+    await user.click(screen.getByRole('link', { name: 'Completed' }));
+
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Completed' });
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
+  it('AppShell_NavigationFromDrawer_MovesFocusToPageHeading', async () => {
+    setViewportWidth(viewports.tablet);
+    const { user } = await renderToday();
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Menu' })).getByRole('link', { name: 'Lists' }),
+    );
+
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Lists' });
+    await waitFor(() => expect(heading).toHaveFocus());
   });
 
   it('AppShell_Mobile_ShowsTopBarWithTitleAndBottomNavigation', async () => {
